@@ -2,7 +2,7 @@
 name: kernelgen-workflow
 description: >
   KernelGen Workflow 子Agent — 迭代式算子代码生成、验证与智能修复编排。
-  流程：代码生成 → 验证 → 性能测试 → 结果分析 → 重新生成或完成。
+  流程：代码生成 → 验证 → 性能测试 → [性能优化] → 完成。
 mode: subagent
 temperature: 0.1
 tools:
@@ -11,12 +11,15 @@ tools:
   bash: true
   skill: true
   read: true
+  task: true
 skills:
   - code-generator
   - kernel-verifier
+subagents:
+  - performance-optimizer
 argument-hint: >
   必需：task-file、arch、output-path。
-  可选：max-iterations、user-requirements、warmup、repeats。
+  可选：max-iterations、user-requirements、warmup、repeats、target-speedup、enable-optimization。
   固定参数（无需传入）：framework=torch、backend=ascend、dsl=triton_ascend。
 ---
 
@@ -49,14 +52,27 @@ argument-hint: >
     ┌────────────────────────┐  ┌───────────────────────┐
     │ 5. 性能测试             │  │ 4. Conductor 分析决策  │
     │ (kernel-verifier)      │  └───────────┬───────────┘
-    └────────────────┬───────┘              ┌─────┴─────┐
+    └────────────────┬───────┘              ┌─────┴─────┘
                      ↓                      ↓           ↓
-              ┌──────────┐            [重新生成]    [终止]
-              │ 6. 完成   │                 ↓           ↓
-              └──────────┘           (回到步骤2)  ┌──────────┐
-                                                  │ 6. 完成   │
-                                                  └──────────┘
+              ┌──────────────┐        [重新生成]    [终止]
+              │ 性能达标判断  │             ↓           ↓
+              └──────┬───────┘      (回到步骤2)  ┌──────────┐
+               ↙           ↘                    │ 7. 完成   │
+          [达标]         [不达标]                └──────────┘
+            ↓               ↓
+     ┌──────────┐   ┌─────────────────────────┐
+     │ 7. 完成   │   │ 6. 性能优化              │ ← subagent
+     └──────────┘   │ (performance-optimizer) │
+                    └───────────┬─────────────┘
+                                ↓
+                         ┌──────────┐
+                         │ 7. 完成   │
+                         └──────────┘
 ```
+
+**两阶段设计**：
+- **Phase 1（功能阶段）**：Step 1-5，生成功能正确的代码
+- **Phase 2（性能阶段）**：Step 6，在功能正确基础上优化性能（可选）
 
 ## 输入参数
 
@@ -72,6 +88,9 @@ argument-hint: >
 | warmup | 否 | 性能测试 warmup 次数（默认 5） |
 | repeats | 否 | 性能测试正式运行次数（默认 50） |
 | no-pytorch-fallback | 否 | 禁止退化成 PyTorch（默认 true） |
+| target-speedup | 否 | 目标加速比（默认 1.0，即达到或超过 PyTorch） |
+| enable-optimization | 否 | 是否启用性能优化（默认 true） |
+| max-opt-iterations | 否 | 性能优化最大迭代次数（默认 3） |
 
 > **固定参数**：`framework=torch`、`backend=ascend`、`dsl=triton_ascend`，无需传入。
 > 
@@ -361,7 +380,7 @@ iteration += 1
 
 ---
 
-### Step 5: 性能测试（验证通过后执行）
+### Step 5: 性能测试与达标判断（验证通过后执行）
 
 > **仅在验证通过后执行**，使用 `kernel-verifier` skill 的性能测试功能。
 
@@ -386,6 +405,10 @@ iteration += 1
 3. **复制性能报告**：
    - 将 `perf_result.json` 复制到 `{output-path}/perf_result.json`（最新一轮）
 
+4. **确保 baseline 代码已保存**：
+   - 将功能正确的代码写入 `{output-path}/generated_code.py`
+   - 此文件作为性能优化的 baseline
+
 **性能指标**：
 
 | 指标 | 说明 |
@@ -396,21 +419,83 @@ iteration += 1
 | `peak_memory_mb` | 峰值内存占用（MB）|
 | `speedup_vs_torch` | 相比原生 PyTorch 实现的加速比 |
 
-**注意**：性能测试仅用于记录，不参与重新生成决策。
+**性能达标判断**：
 
-**完成后** → 进入 **Step 6（完成）**
+```python
+# 判断是否需要性能优化
+target_speedup = target_speedup or 1.0
+enable_optimization = enable_optimization or True
+
+if perf_data.speedup_vs_torch >= target_speedup:
+    # 性能已达标，直接完成
+    进入 Step 7（完成）
+elif not enable_optimization:
+    # 未启用性能优化，直接完成
+    进入 Step 7（完成）
+else:
+    # 性能未达标，进入性能优化阶段
+    进入 Step 6（性能优化）
+```
+
+**路由决策**：
+- **性能达标**（speedup >= target_speedup）→ 进入 **Step 7（完成）**
+- **未启用优化**（enable_optimization = false）→ 进入 **Step 7（完成）**
+- **性能未达标** → 进入 **Step 6（性能优化）**
 
 ---
 
-### Step 6: 完成与输出
+### Step 6: 性能优化（可选阶段）
+
+> **仅在性能未达标且启用优化时执行**，调用 `performance-optimizer` subagent。
+
+**使用 `task` 工具调用 `performance-optimizer` SubAgent**：
+
+调用格式：
+```
+task(
+    subagent_type="performance-optimizer",
+    description="优化 {op_name} 算子性能",
+    prompt="""
+baseline_code_path: {output-path}/generated_code.py
+task_file_path: {task-file}
+op_name: {op_name}
+arch: {arch}
+target_speedup: {target_speedup}
+max_iterations: {max-opt-iterations}
+warmup: {warmup}
+repeats: {repeats}
+""",
+    run_in_background=false
+)
+```
+
+**参数说明**：
+- `subagent_type`: 固定为 `performance-optimizer`
+- `prompt`: 包含 baseline 代码路径、任务文件路径、目标加速比等
+- `run_in_background`: 设为 `false`，同步等待完成
+
+**performance-optimizer 的输出保证**：
+- 输出的 `generated_code.py` **一定**通过功能验证
+- 输出的性能**不低于**输入的 baseline
+- 如果所有优化尝试都失败，返回原始 baseline
+
+**收集优化结果**：
+- 从 `{output-path}/optimization_summary.json` 读取优化结果
+- 更新 `perf_data` 为最终性能数据
+
+**完成后** → 进入 **Step 7（完成）**
+
+---
+
+### Step 7: 完成与输出
 
 无论成功还是失败，都**必须**执行以下操作：
 
-#### 6.1 确保最终代码
+#### 7.1 确保最终代码
 
-- `{output-path}/generated_code.py` 必须存在，内容为最后一轮生成的代码
+- `{output-path}/generated_code.py` 必须存在，内容为最后一轮生成的代码（或优化后的代码）
 
-#### 6.2 生成 summary.json
+#### 7.2 生成 summary.json
 
 使用 `write` 工具将以下内容写入 `{output-path}/summary.json`：
 
@@ -430,6 +515,12 @@ iteration += 1
     "p99_latency_ms": 0.7000,
     "peak_memory_mb": 128.00,
     "speedup_vs_torch": 2.17
+  },
+  "optimization": {
+    "enabled": true,
+    "baseline_speedup": 0.30,
+    "final_speedup": 0.85,
+    "improvement_ratio": 2.83
   }
 }
 ```
@@ -447,17 +538,19 @@ iteration += 1
     {"iteration": 1, "error_type": "A", "error_message": "..."}
   ],
   "last_error": "...",
-  "perf_data": null
+  "perf_data": null,
+  "optimization": null
 }
 ```
 
-#### 6.3 汇报结果
+#### 7.3 汇报结果
 
 向主 Agent 汇报执行结果，包括：
 - 是否成功
 - 总迭代次数
 - `generated_code.py` 路径
 - `perf_result.json` 路径（验证通过时）
+- 性能优化结果（如有）
 - 失败原因（如有）
 
 ---
@@ -466,9 +559,11 @@ iteration += 1
 
 ```
 {output-path}/
-├── generated_code.py          # 最终代码（始终为最新一轮的副本）
+├── generated_code.py          # 最终代码（始终为最新一轮的副本，或优化后的版本）
+├── workspace_code.py          # 工作区代码（性能优化时使用，可能不存在）
 ├── summary.json               # 执行摘要（⚠️ 必须生成）
 ├── perf_result.json           # 最新一轮性能报告（验证通过时）
+├── optimization_summary.json  # 性能优化摘要（启用优化时）
 ├── iter_0/                    # 第 0 轮迭代
 │   ├── generated_code.py      # 本轮生成的代码
 │   ├── verify/                # 本轮验证项目（独立目录，不复用）
@@ -490,6 +585,8 @@ iteration += 1
 - 验证目录 `verify/` 在每轮迭代内，不会互相覆盖
 - 顶层 `generated_code.py` 和 `perf_result.json` 始终是最新一轮的副本
 - `summary.json` 在所有迭代完成后写入，包含聚合的性能数据
+- `optimization_summary.json` 记录性能优化的历史（如果启用了优化）
+- `workspace_code.py` 是性能优化 agent 的工作区文件
 
 ---
 
