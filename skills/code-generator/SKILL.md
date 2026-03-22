@@ -2,10 +2,12 @@
 name: code-generator
 description: >
   Triton Ascend 算子代码生成 Skill — 根据 KernelBench 格式任务描述生成高性能
-  Triton Ascend 内核代码。支持首次生成和基于错误反馈的迭代优化。
+  Triton Ascend 内核代码。支持首次生成、迭代修复和性能优化三种模式。
 argument-hint: >
   输入：op_name、task_desc（任务文件内容）、arch。
-  可选：previous_code、verifier_error、conductor_suggestion、user_requirements。
+  可选：mode（generate/fix/optimize）、previous_code、verifier_error、
+       conductor_suggestion、optimization_hints、optimization_strategies、
+       parameter_suggestions、user_requirements。
   输出：包含 ModelNew 类的完整内核代码。
   固定参数：backend=ascend、framework=torch、dsl=triton_ascend。
 ---
@@ -29,7 +31,8 @@ argument-hint: >
 
 1. **任务描述和规格说明** — KernelBench 格式的算子需求（包含 `Model` 类）
 2. **相关的知识和示例** — Triton Ascend 编程知识（见下方知识加载规则）
-3. **执行历史** — 之前的错误信息和修复建议（迭代生成时）
+3. **执行历史** — 之前的错误信息和修复建议（迭代修复时）
+4. **优化建议** — 性能瓶颈分析和优化策略（性能优化时）
 
 ## 知识加载规则
 
@@ -65,7 +68,7 @@ argument-hint: >
 
 ## 代码生成模式
 
-### 模式 1: 首次生成（无历史信息）
+### 模式 1: 首次生成（mode=generate 或无 mode）
 
 当只有 `op_name`、`task_desc` 等基本参数时：
 
@@ -84,7 +87,7 @@ argument-hint: >
 3. **确保修改后的代码仍然完整可运行**
 4. 输出完整的修改后代码
 
-### 模式 3: 迭代修复（有 verifier_error / conductor_suggestion）
+### 模式 3: 迭代修复（mode=fix，有 verifier_error / conductor_suggestion）
 
 当上一轮验证失败时：
 
@@ -93,6 +96,93 @@ argument-hint: >
 3. **保留优点**：保留上一轮代码中正确的部分，只修改有问题的部分
 4. **针对性修复**：不做不必要的大规模重构
 5. **避免重复**：如果建议中提到了历史教训，确保不犯同样的错误
+
+### 模式 4: 性能优化（mode=optimize）
+
+当需要优化已有代码的性能时：
+
+**输入参数**：
+- `previous_code`: 当前功能正确的代码
+- `optimization_hints`: 来自 performance-analyzer 的优化建议
+- `optimization_strategies`: 来自 optimization-guide 的优化策略
+- `parameter_suggestions`: 参数建议（如 BLOCK_SIZE）
+- `baseline_perf`: 当前性能数据
+
+**优化流程**：
+
+1. **理解当前实现**：
+   - 分析 `previous_code` 的结构和优化点
+   - 理解 `optimization_hints` 中识别的瓶颈
+
+2. **选择优化策略**：
+   - 根据 `optimization_strategies` 的优先级选择策略
+   - 优先选择低风险、高收益的优化
+
+3. **应用优化**：
+   - **参数调优**：根据 `parameter_suggestions` 调整 BLOCK_SIZE 等
+   - **内存优化**：优化内存访问模式，提高合并访问
+   - **计算优化**：使用 tl.dot 触发 Cube Unit
+   - **并行优化**：调整 Grid 配置，充分利用 AI Core
+
+4. **保持约束**：
+   - **功能正确**：不改变计算逻辑
+   - **接口一致**：forward 方法签名不变
+   - **输出一致**：输出形状和数据类型不变
+
+**优化约束**：
+
+```
+必须遵守：
+1. 保持 forward 方法签名不变
+2. 保持 kernel 函数的计算逻辑不变（数学等价）
+3. 保持输出形状和数据类型不变
+
+允许修改：
+1. BLOCK_SIZE、num_stages 等性能参数
+2. 内存访问模式优化
+3. 向量化优化
+4. 循环展开
+5. 使用 tl.dot 替代逐元素计算
+
+禁止修改：
+1. 算法的数学公式
+2. 边界条件的处理逻辑
+3. 数据类型转换的位置（除非是精度优化）
+```
+
+**优化示例**：
+
+```python
+# 原始代码（未优化）
+@triton.jit
+def matmul_slow(a_ptr, b_ptr, c_ptr, M, N, K, ...):
+    for m in range(M):
+        for n in range(N):
+            acc = 0
+            for k in range(K):
+                acc += a[m, k] * b[k, n]  # 逐元素，不触发 Cube
+            c[m, n] = acc
+
+# 优化后代码
+@triton.jit
+def matmul_fast(a_ptr, b_ptr, c_ptr, M, N, K, 
+                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    
+    acc = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
+    
+    for k in range(0, K, BLOCK_K):
+        rk = k + tl.arange(0, BLOCK_K)
+        a = tl.load(a_ptr + rm[:, None] * K + rk[None, :])
+        b = tl.load(b_ptr + rk[:, None] * N + rn[None, :])
+        acc += tl.dot(a, b)  # 使用 tl.dot 触发 Cube Unit
+    
+    tl.store(c_ptr + rm[:, None] * N + rn[None, :], acc)
+```
 
 ---
 
