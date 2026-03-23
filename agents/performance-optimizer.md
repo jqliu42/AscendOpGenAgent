@@ -12,7 +12,6 @@ tools:
   skill: true
   read: true
 skills:
-  - performance-analyzer
   - optimization-guide
   - code-generator
   - kernel-verifier
@@ -131,7 +130,6 @@ while iteration < max_iterations:
 - `mode`: `optimization`（优化模式）
 - `previous_code`: 当前 baseline 代码（从 generated_code.py 读取）
 - `baseline_perf`: 当前性能数据
-- `optimization_hints`: 优化建议（基于性能数据分析）
 
 **输出**：
 - 将生成的代码写入 `workspace_code.py`
