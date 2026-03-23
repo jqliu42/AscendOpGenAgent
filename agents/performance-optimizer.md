@@ -3,7 +3,6 @@ name: performance-optimizer
 description: >
   性能优化 SubAgent — 在功能正确的基础上迭代优化 Triton kernel 性能。
   保证输出代码功能正确，性能不低于输入版本。
-  利用 performance-analyzer 和 optimization-guide skills 进行智能优化。
 mode: subagent
 temperature: 0.1
 tools:

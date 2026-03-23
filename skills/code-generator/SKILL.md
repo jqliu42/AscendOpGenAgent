@@ -103,9 +103,6 @@ argument-hint: >
 
 **输入参数**：
 - `previous_code`: 当前功能正确的代码
-- `optimization_hints`: 来自 performance-analyzer 的优化建议
-- `optimization_strategies`: 来自 optimization-guide 的优化策略
-- `parameter_suggestions`: 参数建议（如 BLOCK_SIZE）
 - `baseline_perf`: 当前性能数据
 
 **优化流程**：
