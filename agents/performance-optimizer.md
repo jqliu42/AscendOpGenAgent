@@ -12,7 +12,7 @@ tools:
   skill: true
   read: true
 skills:
-  - optimization-guide
+  - latency-optimizer
   - code-generator
   - kernel-verifier
 argument-hint: >
