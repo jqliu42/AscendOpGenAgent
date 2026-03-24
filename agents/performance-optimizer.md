@@ -121,7 +121,9 @@ while iteration < max_iterations:
 
 #### Step 2.2: 生成优化版本
 
-加载 `code-generator` skill，生成优化代码。
+先调用 `latency-optimizer` skill 获取优化建议，传入参数：`arch`、`optimization_phase`（首次用 "first"，迭代用 "iterative"）、`current_code`。将返回的 `optimization_strategies` 和 `parameter_suggestions` 传递给 `code-generator`。
+
+然后加载 `code-generator` skill，生成优化代码。
 
 **输入参数**：
 - `op_name`: 算子名称
