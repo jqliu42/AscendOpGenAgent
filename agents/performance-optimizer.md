@@ -136,6 +136,16 @@ while iteration < max_iterations:
 **输出**：
 - 将生成的代码写入 `workspace_code.py`
 
+**记录优化策略**：
+在生成代码后，解析生成的代码与 baseline 代码的差异，记录本轮使用的优化策略和参数变化：
+```python
+optimization_strategies_used = ["BLOCK_SIZE调整", "num_stages优化"]  # 从 latency-optimizer 返回的策略列表
+parameter_changes = {
+    "BLOCK_SIZE": "128->256",
+    "num_stages": "2->3"
+}  # 解析代码得出的具体参数变化
+```
+
 **优化约束**：
 ```
 必须遵守：
@@ -160,7 +170,7 @@ while iteration < max_iterations:
 加载 `kernel-verifier` skill，验证 `workspace_code.py`。
 
 **验证步骤**：
-1. 创建验证目录：`{output_dir}/verify_iter_{iteration}/`
+1. 创建验证目录：`{output_dir}/optim_iter_{iteration}/verify/`
 2. 复制任务文件到验证目录
 3. 复制 workspace_code.py 到验证目录
 4. 调用 `scripts/verify.py` 执行验证
@@ -181,13 +191,16 @@ while iteration < max_iterations:
 
 **执行步骤**：
 1. 调用 `scripts/benchmark.py`
-2. 获取性能数据：`workspace_perf`
+2. 输出性能报告到：`{output_dir}/optim_iter_{iteration}/perf_result.json`
+3. 获取性能数据：`workspace_perf`
 
 **公平性保证**：
 - 每次性能测试使用相同的 warmup 和 repeats 参数
 - 测试环境一致（同一设备、相近的系统负载）
 
 #### Step 2.5: 性能对比与更新
+
+**前提条件**：只有在本轮验证通过（功能和精度达标）的情况下，才进行性能对比和更新。
 
 **性能对比逻辑**：
 
@@ -197,18 +210,54 @@ improvement_ratio = workspace_perf.speedup / best_perf.speedup
 is_better = improvement_ratio > 1.05
 
 if is_better:
-    # 更新 baseline
+    # 只有性能提升时才更新 generated_code.py
     safe_update_base(
         workspace_path="workspace_code.py",
         base_path="generated_code.py"
     )
+    
+    # 更新性能报告文件
+    import shutil
+    shutil.copy(
+        f"{output_dir}/optim_iter_{iteration}/perf_result.json",
+        f"{output_dir}/perf_result.json"
+    )
+    
     best_perf = workspace_perf
     no_improvement_count = 0
     result = "成功，性能提升"
+    
+    # 同时更新 summary.json（保留最佳性能数据）
+    update_summary_json(best_perf)
 else:
-    # 保留原版本
+    # 性能未提升，不覆盖 generated_code.py
+    # 仍然记录优化历史
     no_improvement_count += 1
     result = "成功，但性能未提升"
+```
+
+**update_summary_json 函数**：
+
+```python
+def update_summary_json(perf_data):
+    """更新 summary.json 中的性能数据"""
+    summary_path = f"{output_dir}/summary.json"
+    
+    if os.path.exists(summary_path):
+        with open(summary_path, 'r') as f:
+            summary = json.load(f)
+    else:
+        summary = {}
+    
+    summary.update({
+        "generated_code.py": "generated_code.py",
+        "perf_result": perf_data,
+        "last_optimized_iteration": iteration,
+        "last_optimization_result": result
+    })
+    
+    with open(summary_path, 'w') as f:
+        json.dump(summary, f, indent=2)
 ```
 
 **安全覆写函数**：
@@ -237,8 +286,11 @@ def safe_update_base(workspace_path, base_path):
 ```python
 optimization_history.append({
     "iteration": iteration,
+    "optimization_strategies": optimization_strategies_used,  # 本轮使用的优化策略列表
+    "parameter_changes": parameter_changes,  # 具体参数修改，如 {"BLOCK_SIZE": "128->256", "num_stages": "2->3"}
     "verify_result": "成功" if verify_success else "失败",
     "speedup": workspace_perf.speedup if verify_success else None,
+    "latency_ms": workspace_perf.avg_latency_ms if verify_success else None,
     "improvement_ratio": improvement_ratio if verify_success else None,
     "result": result,
     "error": error_message if not verify_success else None
@@ -273,27 +325,40 @@ optimization_history.append({
   "success": true,
   "total_iterations": 3,
   "baseline_speedup": 0.30,
+  "baseline_latency_ms": 10.5,
   "final_speedup": 0.85,
+  "final_latency_ms": 3.7,
   "improvement_ratio": 2.83,
   "target_achieved": false,
   "optimization_history": [
     {
       "iteration": 0,
+      "optimization_strategies": ["BLOCK_SIZE调整", "num_stages优化"],
+      "parameter_changes": {"BLOCK_SIZE": "128->256", "num_stages": "2->3"},
       "verify_result": "失败",
+      "speedup": null,
+      "latency_ms": null,
+      "improvement_ratio": null,
       "result": "验证失败",
       "error": "精度不匹配..."
     },
     {
       "iteration": 1,
+      "optimization_strategies": ["向量化优化", "内存访问模式优化"],
+      "parameter_changes": {"BLOCK_SIZE": "256->512", "num_stages": "3->4"},
       "verify_result": "成功",
       "speedup": 0.50,
+      "latency_ms": 6.2,
       "improvement_ratio": 1.67,
       "result": "成功，性能提升"
     },
     {
       "iteration": 2,
+      "optimization_strategies": ["循环展开", "预取优化"],
+      "parameter_changes": {"BLOCK_SIZE": "512->1024", "num_warps": "4->8"},
       "verify_result": "成功",
       "speedup": 0.85,
+      "latency_ms": 3.7,
       "improvement_ratio": 1.70,
       "result": "成功，性能提升"
     }
