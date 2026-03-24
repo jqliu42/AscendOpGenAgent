@@ -603,7 +603,7 @@ repeats: {repeats}
 | 任务文件只读 | 禁止修改 task-file |
 | 语言 | 所有思考、分析、日志必须使用中文 |
 | 禁止 PyTorch 退化 | 生成的代码必须包含 @triton.jit kernel，禁止直接使用 PyTorch 算子（如 torch.matmul、F.softmax 等） |
-| 语言 | 所有思考、分析、日志必须使用中文 |
+| 禁止 Hacking | 禁止提前创建空的 iter_ 目录或无实际内容的文件夹来伪造进度。所有目录和文件必须在实际执行相应步骤后创建 |
 
 ## 适用场景
 
