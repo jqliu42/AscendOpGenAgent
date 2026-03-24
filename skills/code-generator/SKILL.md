@@ -118,7 +118,6 @@ argument-hint: >
 3. **应用优化**：
    - **参数调优**：根据 `parameter_suggestions` 调整 BLOCK_SIZE 等
    - **内存优化**：优化内存访问模式，提高合并访问
-   - **计算优化**：使用 tl.dot 触发 Cube Unit
    - **并行优化**：调整 Grid 配置，充分利用 AI Core
 
 4. **保持约束**：
@@ -133,52 +132,6 @@ argument-hint: >
 1. 保持 forward 方法签名不变
 2. 保持 kernel 函数的计算逻辑不变（数学等价）
 3. 保持输出形状和数据类型不变
-
-允许修改：
-1. BLOCK_SIZE、num_stages 等性能参数
-2. 内存访问模式优化
-3. 向量化优化
-4. 循环展开
-5. 使用 tl.dot 替代逐元素计算
-
-禁止修改：
-1. 算法的数学公式
-2. 边界条件的处理逻辑
-3. 数据类型转换的位置（除非是精度优化）
-```
-
-**优化示例**：
-
-```python
-# 原始代码（未优化）
-@triton.jit
-def matmul_slow(a_ptr, b_ptr, c_ptr, M, N, K, ...):
-    for m in range(M):
-        for n in range(N):
-            acc = 0
-            for k in range(K):
-                acc += a[m, k] * b[k, n]  # 逐元素，不触发 Cube
-            c[m, n] = acc
-
-# 优化后代码
-@triton.jit
-def matmul_fast(a_ptr, b_ptr, c_ptr, M, N, K, 
-                BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr):
-    pid_m = tl.program_id(0)
-    pid_n = tl.program_id(1)
-    
-    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-    
-    acc = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
-    
-    for k in range(0, K, BLOCK_K):
-        rk = k + tl.arange(0, BLOCK_K)
-        a = tl.load(a_ptr + rm[:, None] * K + rk[None, :])
-        b = tl.load(b_ptr + rk[:, None] * N + rn[None, :])
-        acc += tl.dot(a, b)  # 使用 tl.dot 触发 Cube Unit
-    
-    tl.store(c_ptr + rm[:, None] * N + rn[None, :], acc)
 ```
 
 ---
