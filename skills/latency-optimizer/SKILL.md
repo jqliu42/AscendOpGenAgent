@@ -28,6 +28,7 @@ argument-hint: >
 | 入参静态化 | `references/constexpr_parameters.md` |
 | Int32 向量加法 | `references/int32_vector_add.md` |
 | Load 指令重排序 | `references/load-order.md` |
+| Grid 并行数量限制 | `references/grid-limit.md` |
 
 ### 以下文档通过分析已有代码特征，按需加载
 
