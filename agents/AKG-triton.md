@@ -378,13 +378,17 @@ repeats: 50",
 
    ⚠️ **必须使用 `task` 工具**
 
+   **⚠️ 关键说明 - 必须传递两种算子版本的文件路径**：
+   - **PyTorch 版本路径**（task-file-path）：Phase 1 生成的 `<工作目录>/{op_name}.py`，KernelBench 格式的 PyTorch 参考实现
+   - **Triton 基线版本路径**（code-file-path）：用户提供的原始 Triton 算子代码文件路径
+
    **调用格式（用户指定了目标加速比时）**：
    ```
    task(
      subagent_type="performance-optimizer",
      load_skills=[],
      description="优化 {op_name} 算子性能",
-     prompt="任务文件路径: <工作目录>/{op_name}.py\n代码文件路径: {code-file-path}\n输出路径: <工作目录>/output/\narch: {arch}\n目标加速比: {target-speedup}x\n框架: torch\n后端: ascend\nDSL: triton_ascend\nwarmup: 5\nrepeats: 50",
+     prompt="task-file-path: <工作目录>/{op_name}.py（PyTorch版本，KernelBench格式）\ncode-file-path: {code-file-path}（Triton基线版本）\n输出路径: <工作目录>/output/\narch: {arch}\n目标加速比: {target-speedup}x\n框架: torch\n后端: ascend\nDSL: triton_ascend\nwarmup: 5\nrepeats: 50",
      run_in_background=false
    )
    ```
@@ -395,7 +399,7 @@ repeats: 50",
      subagent_type="performance-optimizer",
      load_skills=[],
      description="优化 {op_name} 算子性能",
-     prompt="任务文件路径: <工作目录>/{op_name}.py\n代码文件路径: {code-file-path}\n输出路径: <工作目录>/output/\narch: {arch}\n目标加速比: 无（自动优化）\n框架: torch\n后端: ascend\nDSL: triton_ascend\nwarmup: 5\nrepeats: 50",
+     prompt="task-file-path: <工作目录>/{op_name}.py（PyTorch版本，KernelBench格式）\ncode-file-path: {code-file-path}（Triton基线版本）\n输出路径: <工作目录>/output/\narch: {arch}\n目标加速比: 无（自动优化）\n框架: torch\n后端: ascend\nDSL: triton_ascend\nwarmup: 5\nrepeats: 50",
      run_in_background=false
    )
    ```
@@ -403,7 +407,12 @@ repeats: 50",
    **参数说明**：
    - `subagent_type`: 固定为 `performance-optimizer`
    - `load_skills`: 传 `[]`，SubAgent 会自行加载所需 skill
-   - `prompt`: 包含任务文件路径、代码文件路径、输出路径、arch、目标加速比等全部所需信息
+   - `prompt`: 包含以下关键信息：
+     - **task-file-path**: PyTorch 版本的 KernelBench 格式任务文件路径（Phase 1 生成）
+     - **code-file-path**: Triton 基线算子的文件路径（用户提供）
+     - **输出路径**: 优化结果输出目录
+     - **arch**: 硬件架构
+     - **目标加速比**: 用户指定的目标或"无（自动优化）"
    - `run_in_background`: 设为 `false`，同步等待完成
 
 3. 完成后，检查 `summary.json` 和 `optimized_code.py`
