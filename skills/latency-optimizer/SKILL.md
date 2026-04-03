@@ -35,4 +35,5 @@ argument-hint: >
 | 识别特征 | 加载文档 |
 |----------|----------|
 | 代码中涉及数值比较操作（整数索引与数据比较、tl.where等） | `references/vector_compare.md` |
+| 代码中涉及非连续维度的还原操作（Mean, Sum, Argmax, Min, Max等） | `references/non_contiguous_ops.md` |
 
