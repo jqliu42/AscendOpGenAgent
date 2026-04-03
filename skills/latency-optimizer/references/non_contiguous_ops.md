@@ -22,65 +22,13 @@
 
 ---
 
-## 3. 标准实现模板
+## 3. 性能调优 Checklist
 
-以下是以 `Mean Reduction` 为例的标准高性能模板：
-
-```python
-import triton
-import triton.language as tl
-
-@triton.jit
-def reduction_kernel(
-    input_ptr, output_ptr,
-    B, M, N,
-    stride_b, stride_m, stride_n,
-    num_cores: tl.constexpr,
-    BLOCK_N: tl.constexpr,
-):
-    # 获取当前物理核心 ID
-    pid = tl.program_id(0)
-
-    # 计算 N 维度分块数和每个核心处理的起始块
-    num_n_blocks = tl.cdiv(N, BLOCK_N)
-    blocks_per_core = tl.cdiv(num_n_blocks, num_cores)
-    start_n_block = pid * blocks_per_core
-    end_n_block = tl.minimum(start_n_block + blocks_per_core, num_n_blocks)
-
-    # 连续处理 N 维度的分片（避免交织）
-    for n_block_idx in range(start_n_block, end_n_block):
-        # 1. 产生连续维度 N 的偏移量 (关键：实现访存合并)
-        offsets_n = n_block_idx * BLOCK_N + tl.arange(0, BLOCK_N)
-        mask_n = offsets_n < N
-
-        # 2. 按 Batch 维度顺序处理
-        for b_idx in range(0, B):
-            # 3. 初始化向量累加器 (长度为 BLOCK_N)
-            acc = tl.zeros((BLOCK_N,), dtype=tl.float32)
-
-            # 4. 定位到当前 Batch 和 N 分片的起始指针
-            # 注意：offsets_n * stride_n 保证了在连续维度上步进
-            curr_input_ptr = input_ptr + b_idx * stride_b + offsets_n * stride_n
-
-            # 5. 沿还原维度 M 进行标量循环
-            for m_idx in range(0, M):
-                # 这里的加载指令会一次性读取内存中连续的物理块
-                vals = tl.load(curr_input_ptr + m_idx * stride_m, mask=mask_n, other=0.0)
-                acc += vals
-
-            # 6. 计算均值并写回结果
-            mean_val = acc / M
-            output_offset = b_idx * N + offsets_n
-            tl.store(output_ptr + output_offset, mean_val, mask=mask_n)
-```
-
-## 4. 性能调优 Checklist
-
-1. **确定 BLOCK_N 大小**：通常设置为 1024 或 2048。对于 dim2=4095 这种规模，建议 BLOCK_N 设为 4096 以便一次性处理整行。
+1. **确定 BLOCK_N 大小**：通常设置为 1024 或 2048。对于 dim2=4095 这种规模，建议 BLOCK_N 设为 4096 以便一次性处理整行。但要考虑片上缓存大小，避免OOM
 2. **掩码保护 (Masking)**：由于 BLOCK_N 通常为 2 的幂，而实际维度（如 4095）可能不对齐，必须使用 mask_n 确保访存安全。
 3. **避免物理转置**：本方案通过"逻辑转置读取"避免了物理转置带来的额外 $3\times$ 显存带宽消耗。
 4. **硬件适配**：在 NPU 上，确保 num_cores 与硬件实际的 Vector Core 数量一致，以触发最优调度。
 
-## 5. 使用说明
+## 4. 使用说明
 
 在生成任何还原类算子（Mean, Sum, Argmax, Min, Max）时，若还原维度不是内存中最连续的维度，应严格遵守此模板结构。
