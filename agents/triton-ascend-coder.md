@@ -223,7 +223,7 @@ while iteration < max_iterations:
 
 ```
 opt_iteration = 0
-max_opt_iterations = 3
+max_opt_iterations = 5
 best_code = ""
 best_speedup = 0.0
 baseline_code = Phase 3 产出的 generated_code.py
@@ -266,8 +266,9 @@ while opt_iteration < max_opt_iterations:
 
     ── 4.4 结果判定 ──────────────────────────────────
 
-    speedup_vs_baseline ≥ 1.05:
-      → 优化成功，更新 best_code / best_speedup
+    speedup_vs_baseline ≥ 1.0:
+      → 优化成功（性能不劣化即视为成功）
+      → 更新 best_code / best_speedup
       → break，进入 Phase 5
 
     latency-optimizer 报告无更多优化点:
@@ -409,8 +410,8 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 最大迭代 | 3 次，禁止超出 |
-| Phase 4 成功底线 | 性能超过基线 Triton 实现 5% |
+| Phase 4 最大迭代 | 5 次，禁止超出 |
+| Phase 4 成功底线 | 性能不劣化（speedup_vs_baseline ≥ 1.0） |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |
