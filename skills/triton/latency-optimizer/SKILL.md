@@ -5,7 +5,7 @@ description: >
   按照严格的顺序逐步优化 Triton 代码，每次只尝试一个优化点，
   确保优化前后功能一致、精度一致。
 argument-hint: >
-  输入：code-file-path（代码文件路径）、optimization-point（当前优化点序号，1-4）。
+  输入：code-file-path（代码文件路径）。
   输出：优化后的 Triton 代码、功能一致性说明、精度一致性说明。
   固定参数：framework=torch、backend=ascend、dsl=triton_ascend。
 ---
@@ -26,7 +26,7 @@ Agent 必须严格按照以下顺序逐一检查和尝试优化点，每次只�
 |------|--------|----------|----------|
 | 1 | 入参静态化优化 | `references/constexpr_parameters.md` | 代码中存在可声明为 `tl.constexpr` 的固定参数 |
 | 2 | tiling 优化 | `references/tiling_optimization.md` | 代码中存在可优化的循环分块策略 |
-| 3 | 标量操作优化 | `references/scalar_op_optimization.md` | 代码中存在可优化的标量计算 |
+| 3 | 标量操作优化 | `references/scalar_op_optimization.md` | 代码中存在可优化的标量计算或离散访存操作 |
 | 4 | BLOCK_SIZE 调优 | `references/block_size_tuning.md` | 代码中存在可调整的 BLOCK_SIZE 参数 |
 
 ## 优化流程
@@ -38,7 +38,7 @@ Agent 必须严格按照以下顺序逐一检查和尝试优化点，每次只�
 2. 分析代码是否涉及该优化点：
    - 涉及 → 应用该优化点的优化策略
    - 不涉及 → 直接返回"该优化点不适用"，跳过
-3. 应用优化前，必须先加载 references/checklist.md 检查代码规范
+3. 应用优化点之后，必须加载 references/checklist.md 检查代码规范
 4. 如果代码规范不满足 → 修改代码直到满足规范
 5. 代码规范满足后 → 返回优化后的代码
 ```
