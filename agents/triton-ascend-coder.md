@@ -241,7 +241,15 @@ while True:
     latency-optimizer 报告无更多优化点:
       → 终止优化，进入 4.6 终局判定
 
+    根据优化点进行代码优化重写
     产物 → {工作目录}/output/opt_iter_{opt_iteration}/optimized_code.py
+
+    checklist 检查:
+      读取latency-optimizer skill 中的references\checklist.md，获取代码规范 checklist
+      验证 optimized_code.py 是否满足所有代码规范
+      不满足 → 修改代码直至满足规范 → 重新检查
+      满足 → 进入 4.2 双重验证
+    
     复制 → {工作目录}/output/optimized_code.py
 
     ── 4.2 双重验证 ──────────────────────────────────
