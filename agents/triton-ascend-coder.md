@@ -340,7 +340,7 @@ while True:
   "perf_data": {
     "avg_latency_ms": 0.5678,
     "speedup_vs_torch": 2.17,
-    "speedup_vs_baseline": 1.35
+    "speedup_vs_triton_baseline": 1.35
   }
 }
 ```
