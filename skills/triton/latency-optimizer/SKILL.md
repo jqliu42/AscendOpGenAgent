@@ -1,437 +1,245 @@
 ---
 name: latency-optimizer
 description: >
-  擅长在 Ascend NPU 平台上编写高效 Triton 算子的性能优化专家。
-  按照严格的顺序逐步优化 Triton 代码，每次只尝试一个优化点，
-  确保优化前后功能一致、精度一致。
-  ⚠️ 只能使用本 skill 规定的优化方式，禁止使用任何超出本 skill 之外的优化方式。
+  Triton-Ascend 性能优化执行专家 Agent。
+  负责根据指定的优化点，对 Triton 代码进行修改和验证。
+  每次只执行一个优化点，确保精度和性能。
 argument-hint: >
-  输入：code-file-path（代码文件路径）。
-  输出：优化后的 Triton 代码、功能一致性说明、精度一致性说明。
-  固定参数：framework=torch、backend=ascend、dsl=triton_ascend。
+  输入：code-file-path（代码路径）、optimization-point-index（优化点序号）、output-dir（输出目录）。
+  输出：优化后的代码文件路径、精度验证结果、性能验证结果。
 ---
 
 # Latency Optimizer Skill
 
 <role>
-你是一个擅长在 Ascend NPU 平台上编写高效 Triton 算子的性能优化专家。
-你的任务是按照严格的顺序逐步优化 Triton 代码，每次只尝试一个优化点。
-**必须确保优化前后的功能一致性和精度一致性。**
-**⚠️ 只能使用本 skill 规定的优化方式，禁止使用任何超出本 skill 之外的优化方式。**
+你是一个擅长在 Ascend NPU 平台上执行 Triton 算子性能优化的专家。
+你的任务是：
+1. 根据指定的优化点，对代码进行修改
+2. 验证精度一致性
+3. 验证性能（确保不劣化）
+4. 返回执行结果
+
+**重要**：你只负责执行优化，不负责分析。分析由 latency-analyzer skill 负责。
 </role>
 
-## 优化点执行顺序
+## 职责范围
 
-Agent 必须严格按照以下顺序逐一检查优化点，**每次只能尝试一个优化点，命中后参考对应文档**。
+**你的职责**：
+- 根据优化点序号执行对应的优化
+- 代码修改和验证
+- 精度一致性验证
+- 性能验证（确保不劣化）
 
-⚠️ **前置要求**：必须先命中某个优化点的「命中条件」（代码特征满足典型代码特征之一且适用条件成立），才能加载对应的参考文档。未命中则跳过，禁止加载参考文档。
+**你的限制**：
+- 只能使用本 skill 规定的 12 种优化方式
+- 一次只能执行一个优化点
+- 必须先命中优化点的"命中条件"才能应用优化
 
 ---
+
+## 输入参数
+
+- `code-file-path`: 当前待优化的代码文件完整路径
+- `optimization-point-index`: 要执行的优化点序号（1-12）
+- `output-dir`: 本轮优化迭代的输出目录
+- `op-name`: 算子名称
+
+---
+
+## 优化点定义
 
 ### 优化点 1：入参静态化优化
 
-**适用条件**：代码中存在可声明为 `tl.constexpr` 的固定参数
-
-**典型代码特征**：
-```python
-@triton.jit
-def kernel(A, B, C, M, N,
-            stride_am, stride_an,  # 运行时不变化的固定值，但未声明为 constexpr
-            BLOCK_SIZE_M: tl.constexpr,
-            BLOCK_SIZE_K: tl.constexpr):
-```
-
-**判断逻辑**：
-- 如果代码中存在运行时不变化的固定参数（如 stride、固定数值、BLOCK_SIZE等）未声明为 `tl.constexpr` → 涉及
-- 如果所有固定参数都已正确声明为 `tl.constexpr` → 不涉及，跳过
-
-**命中条件**：代码特征满足上述典型代码特征之一，且适用条件成立
-
-**参考文档**：`references/constexpr_parameters.md`
-
----
+**序号**: 1
+**适用条件**: 代码中存在可声明为 `tl.constexpr` 的固定参数
+**参考文档**: `references/constexpr_parameters.md`
 
 ### 优化点 2：Tiling 优化（连续轴向量化）
 
-**适用条件**：处理多维张量（3D 及以上）的规约类或归一化算子，且规约轴并非内存布局中的最连续轴
-
-**典型代码特征**：
-```python
-@triton.jit
-def kernel(input_ptr, output_ptr, dim1, dim2, ...):
-    # 特征 1：向量化偏移 tl.arange 作用在非连续轴（如 dim1/M 轴）
-    m_offsets = tl.arange(0, BLOCK_SIZE_M)
-    # 特征 2：访存偏移计算中，向量化部分乘上了较大的 stride
-    input_offset = m_offsets * stride_m + n_idx * stride_n
-    # 特征 3：循环内部频繁进行还原操作（如 tl.sum）将向量压缩为标量
-    acc = tl.zeros((BLOCK_SIZE_M,), dtype=tl.float32)
-    ...
-    total_sum = tl.sum(acc, axis=0)
-```
-
-**判断逻辑**：
-- 检查 `tl.load` 的偏移量计算：如果 `tl.arange` 产生的向量偏移量作用于 `stride > 1` 的轴，而存在 `stride = 1` 的轴仅被当作标量索引处理 → 涉及
-- 检查循环累加器：如果累加器在还原轴上分块，但访存模式导致了非连续内存读取 → 涉及
-- 如果 `tl.arange` 已经作用于内存最连续的轴（通常是最后一张量的最后一维），且实现了合并访存 → 不涉及，跳过
-
-**命中条件**：代码逻辑旨在对某维度进行还原，但其分块策略导致硬件执行了跨步访存
-
-**参考文档**：`references/tiling_optimization.md`
-
----
+**序号**: 2
+**适用条件**: 处理多维张量的规约类或归一化算子，且规约轴并非内存布局中的最连续轴
+**参考文档**: `references/tiling_optimization.md`
 
 ### 优化点 3：分核优化
 
-**适用条件**：代码中 Grid 大小设置不合理，或未充分利用 NPU 硬件资源
-
-**典型代码特征**：
-```python
-# 特征 1：Grid 远大于物理核数
-grid = (batch_size,)  # 如果 batch_size=128，远超 48 核
-
-# 特征 2：Grid 远小于物理核数
-grid = (batch_size // 64,)  # 如果 batch_size=128，只有 2 核
-
-# 特征 3：每个 program 只处理 1 行数据
-row_idx = tl.program_id(0)
-x = tl.load(ptr + row_idx * stride + cols, mask=mask)
-
-# 特征 4：未使用编译优化选项（multibuffer、unit_flag）
-kernel[grid](...)  # 未传入 multibuffer、unit_flag
-```
-
-**判断逻辑**：
-- 检查 Grid 大小是否接近物理核数（40-48）
-  - 如果 Grid >> 48 或 Grid << 48 → 涉及
-- 检查每个 program 处理的数据量
-  - 如果每个 program 只处理少量数据（如 1 行）→ 涉及
-- 检查是否使用了编译优化选项
-  - 如果未使用 multibuffer 且是内存密集型算子 → 涉及
-- 如果 Grid 合理且已使用优化选项 → 不涉及，跳过
-
-**命中条件**：代码中 Grid 大小设置不合理，或未充分利用 NPU 硬件资源
-
-**参考文档**：`references/vector_core_partition.md`
-
----
+**序号**: 3
+**适用条件**: 代码中 Grid 大小设置不合理，或未充分利用 NPU 硬件资源
+**参考文档**: `references/vector_core_partition.md`
 
 ### 优化点 4：离散访存优化
 
-**适用条件**：代码中存在通过随机/不可预测索引访问全局内存
-
-**典型代码特征**：
-```python
-# 索引来源于 tl.load 加载的值（随机性）
-idx = tl.load(indices_ptr + offset)  # idx 是运行时确定的随机值
-val = tl.load(data_ptr + idx)        # 通过随机索引访问
-
-# 或者索引来源于 kernel 入参（可能是随机值）
-val = tl.load(ptr + random_index)
-```
-
-**判断逻辑**：
-- 检查 `tl.load` 的索引来源：
-  - 如果索引是 `tl.program_id` 线性变换 → 确定性连续，不涉及
-  - 如果索引是循环变量线性变换 → 确定性步长，不涉及
-  - 如果索引来源于 `tl.load` 加载的值或 kernel 入参 → 潜在随机，涉及
-- 如果所有访存索引都是确定性连续/步长模式 → 不涉及，跳过
-
-**命中条件**：代码中存在通过随机/不可预测索引访问全局内存
-
-**参考文档**：`references/discrete_memory_access.md`
-
----
+**序号**: 4
+**适用条件**: 代码中存在通过随机/不可预测索引访问全局内存
+**参考文档**: `references/discrete_memory_access.md`
 
 ### 优化点 5：Scalar 转 Vector 优化
 
-**适用条件**：代码中存在标量操作，可转换为向量操作以充分利用 NPU Vector 计算单元
-
-**典型代码特征**：
-```python
-# 特征 1：标量广播操作
-scalar_val = 0.5  # Python 标量
-result = x * scalar_val  # scalar 广播，无法启用 vector 加速
-
-# 特征 2：标量规约操作
-sum_val = 0.0  # 标量累加器
-for n in range(N):
-    val = tl.load(x_ptr + n)
-    sum_val += val  # 标量加法
-
-# 特征 3：标量控制流
-if x > 0:  # 标量条件，导致 warp divergence
-    result = tl.exp(x)
-else:
-    result = tl.cos(x)
-
-# 特征 4：int 类型比较/除法/取余
-is_invalid = tok < 0  # int 类型比较，退化为标量
-c = a // b  # int 类型除法，退化为标量
-d = a % b   # int 类型取余，退化为标量
-```
-
-**判断逻辑**：
-- 检查是否存在 Python 标量与向量数据的计算（标量广播）
-- 检查是否存在标量累加器（如 `sum_val = 0.0`）
-- 检查是否存在 `if-else` 控制流处理向量数据
-- 检查是否存在 `int32/int64` 类型的比较、除法、取余操作
-- 如果存在以上任一情况 → 涉及
-- 如果所有操作都已使用向量形式 → 不涉及，跳过
-
-**命中条件**：代码中存在标量操作，可转换为向量操作
-
-**参考文档**：`references/scalar_to_vector.md`
-
----
+**序号**: 5
+**适用条件**: 代码中存在标量操作，可转换为向量操作以充分利用 NPU Vector 计算单元
+**参考文档**: `references/scalar_to_vector.md`
 
 ### 优化点 6：Pass 合并优化
 
-**适用条件**：代码中存在多次遍历相同数据计算不同统计量
-
-**典型代码特征**：
-```python
-# Pass 1: 计算 mean
-for ...:
-    data = tl.load(...)
-    mean += tl.sum(data)
-
-# Pass 2: 计算 variance（再次遍历！）
-for ...:
-    data = tl.load(...)  # 重复加载
-    var += tl.sum((data - mean) ** 2)
-
-# Pass 3: 归一化（第三次遍历！）
-for ...:
-    data = tl.load(...)  # 第三次加载
-    tl.store(...)
-```
-
-**判断逻辑**：
-- 检查是否存在多个独立的循环遍历相同数据
-- 检查是否可以同时计算多个统计量（如 sum + sum_sq 可同时计算 mean + var）
-- 如果存在多次遍历且可合并 → 涉及
-- 如果只有单次遍历，或统计量之间有依赖无法合并 → 不涉及，跳过
-
-**命中条件**：代码中存在多次遍历相同数据，且可以合并计算
-
-**参考文档**：`references/pass-merge.md`
-
----
+**序号**: 6
+**适用条件**: 代码中存在多次遍历相同数据计算不同统计量
+**参考文档**: `references/pass-merge.md`
 
 ### 优化点 7：维度合并优化
 
-**适用条件**：代码中存在多层嵌套循环处理连续维度，且维度间无依赖关系
-
-**典型代码特征**：
-```python
-# 问题代码：3层循环处理 NCHW 布局
-for n in range(N):           # 64 次
-    for h in range(H):       # 512 次
-        for w_start in range(0, W, BLOCK_SIZE):  # 循环层数过多
-            base_offset = n * stride_n + c * stride_c + h * stride_h
-            data = tl.load(input_ptr + base_offset + ...)
-```
-
-**判断逻辑**：
-- 检查是否存在多层嵌套循环（3层及以上）
-- 检查循环维度是否为连续内存布局（如 NCHW 的 H×W）
-- 检查维度间是否有依赖关系
-- 如果存在多层循环且维度连续、无依赖 → 涉及
-- 如果循环层数较少，或维度间有依赖 → 不涉及，跳过
-
-**命中条件**：代码中存在多层嵌套循环处理连续维度，且可合并
-
-**参考文档**：`references/dimension-merge.md`
-
----
+**序号**: 7
+**适用条件**: 代码中存在多层嵌套循环处理连续维度，且维度间无依赖关系
+**参考文档**: `references/dimension-merge.md`
 
 ### 优化点 8：Libdevice 函数使用
 
-**适用条件**：代码中存在手动实现的数学函数，而 `tl.extra.cann.libdevice` 中已有优化版本
-
-**典型代码特征**：
-```python
-# 手动实现 round
-return (x + 0.5).to(tl.int8)
-
-# 手动实现 relu
-out = tl.maximum(x, 0.0)
-
-# 手动实现 tanh、sinh、pow 等数学函数
-```
-
-**判断逻辑**：
-- 检查代码中是否手动实现了以下函数：round、trunc、relu、tanh、sinh、cosh、pow、atan、acos、asin、expm1、log1p、hypot 等
-- 如果存在手动实现且 `tl.extra.cann.libdevice` 中有对应函数 → 涉及
-- 如果代码中没有数学函数实现，或已使用 libdevice 版本 → 不涉及，跳过
-
-**命中条件**：代码中存在手动实现的数学函数，且 libdevice 中有优化版本
-
-**参考文档**：`references/libdevice-usage.md`
-
----
+**序号**: 8
+**适用条件**: 代码中存在手动实现的数学函数，而 `tl.extra.cann.libdevice` 中已有优化版本
+**参考文档**: `references/libdevice-usage.md`
 
 ### 优化点 9：循环不变量外提
 
-**适用条件**：代码中存在嵌套循环，且内层循环中有只依赖外层变量的 `tl.load`
-
-**典型代码特征**：
-```python
-# 问题代码：内层循环重复加载相同值
-for outer_idx in range(outer_size):
-    for inner_idx in range(inner_size):
-        param_idx = outer_idx  # 只依赖外层变量
-        val = tl.load(param_ptr + param_idx)  # 重复加载相同值
-        ...
-
-# 或者通过整除映射到更粗粒度
-for block in range(num_blocks):
-    offsets = block * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    channel = offsets // spatial_size
-    w = tl.load(weight_ptr + channel)  # 相同 channel 重复加载
-```
-
-**判断逻辑**：
-- 检查是否存在嵌套循环结构
-- 检查内层循环中是否有 `tl.load(param_ptr + index_expr)`
-- 检查 `index_expr` 是否只依赖外层循环变量，不依赖内层循环变量
-- 如果存在且内层循环次数 >> 外层循环次数 → 涉及
-- 如果没有嵌套循环，或所有 load 都依赖内层变量 → 不涉及，跳过
-
-**命中条件**：代码中存在嵌套循环，且内层循环中有只依赖外层变量的 `tl.load`
-
-**参考文档**：`references/loop-invariant-hoisting.md`
-
----
+**序号**: 9
+**适用条件**: 代码中存在嵌套循环，且内层循环中有只依赖外层变量的 `tl.load`
+**参考文档**: `references/loop-invariant-hoisting.md`
 
 ### 优化点 10：Load 指令重排序
 
-**适用条件**：代码中存在循环，且循环内有多个 `tl.load` 和 `tl.store`，存在数据依赖导致的阻塞
-
-**典型代码特征**：
-```python
-for i in range(HEAD_NUM):
-    # load B 在前，会等待上一次循环的 store B
-    idx_B = tl.load(p_B_index)
-    b_B = tl.load(p_B)
-    
-    # load A 在后，必须等 load B 完成
-    b_A = tl.load(p_A)
-    
-    # calculation
-    b_O = b_A * b_B
-    
-    # store
-    tl.store(p_O, b_O)
-    tl.store(p_B, b_B)  # store B 会阻塞下一次循环的 load B
-```
-
-**判断逻辑**：
-- 检查是否存在循环结构
-- 检查循环内是否有多个 `tl.load` 和 `tl.store`
-- 检查是否存在 `load A` 与 `store B` 之间没有数据依赖，但被其他依赖阻塞的情况
-- 如果存在可重排序的 load 指令 → 涉及
-- 如果循环内只有一个 load，或所有 load 都有依赖关系 → 不涉及，跳过
-
-**命中条件**：代码中存在循环，且有 load 指令可以通过重排序提前发射
-
-**参考文档**：`references/load-order.md`
-
----
+**序号**: 10
+**适用条件**: 代码中存在循环，且循环内有多个 `tl.load` 和 `tl.store`，存在数据依赖导致的阻塞
+**参考文档**: `references/load-order.md`
 
 ### 优化点 11：BLOCK_SIZE 调优
 
-**适用条件**：代码中存在可调整的 BLOCK_SIZE 参数，且 BLOCK_SIZE 未经过充分调优
-
-**典型代码特征**：
-```python
-@triton.jit
-def kernel(A, C, M, N,
-            BLOCK_M: tl.constexpr = 128,  # BLOCK_SIZE 可能需要调优
-            BLOCK_N: tl.constexpr = 128):
-```
-
-**判断逻辑**：
-- 如果代码中存在 BLOCK_SIZE 参数（BLOCK_M、BLOCK_N、BLOCK_K 等）且未进行系统性调优 → 涉及
-- 如果 BLOCK_SIZE 已经过充分调优（如通过 benchmark 确定了最优值，或已使用 autotune）→ 不涉及，跳过
-- 检查 BLOCK_SIZE 是否超过分块维度大小（会导致 padding 问题）→ 涉及
-
-**命中条件**：代码中存在 BLOCK_SIZE 参数，且当前值可能不是最优配置
-
-**参考文档**：`references/block_size_tuning.md`
-
----
+**序号**: 11
+**适用条件**: 代码中存在可调整的 BLOCK_SIZE 参数，且 BLOCK_SIZE 未经过充分调优
+**参考文档**: `references/block_size_tuning.md`
 
 ### 优化点 12：Autotune 自动调优
 
-**适用条件**：代码中存在多个可调参数，且未使用 autotune 进行自动搜索
-
-**典型代码特征**：
-```python
-# 未使用 autotune，手动指定固定参数
-@triton.jit
-def kernel(..., BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr):
-    ...
-
-# 调用时固定参数
-kernel[grid](..., BLOCK_M=128, BLOCK_N=128)
-```
-
-**判断逻辑**：
-- 检查是否已使用 `@triton.autotune` 装饰器
-- 检查是否存在多个可调的 `tl.constexpr` 参数
-- 如果未使用 autotune 且存在可调参数 → 涉及
-- 如果已使用 autotune → 不涉及，跳过
-
-**命中条件**：代码中存在多个可调参数，且未使用 autotune
-
-**参考文档**：`references/autotune.md`
+**序号**: 12
+**适用条件**: 代码中存在多个可调参数，且未使用 autotune 进行自动搜索
+**参考文档**: `references/autotune.md`
 
 ---
 
-## 优化流程
+## 执行流程
+
+### Step 1: 读取代码和分析优化点
+
+1. 读取 `code-file-path` 指定的代码文件
+2. 根据 `optimization-point-index` 确定要执行的优化点
+3. 加载对应的参考文档
+
+### Step 2: 验证命中条件
+
+**必须先验证命中条件**：
+- 如果命中条件不满足，**不能执行优化**，返回失败
+- 如果命中条件满足，**才能应用优化**
+
+### Step 3: 代码优化
+
+1. 根据参考文档中的优化策略修改代码
+2. 保存到 `{output-dir}/optimized_code.py`
+
+### Step 4: Checklist 检查
+
+加载 `references/checklist.md`，逐项检查代码是否满足规范：
+- 不满足 → 修改代码直至满足规范 → 重新检查
+
+### Step 5: 精度验证
+
+调用 kernel-verifier skill 的 verify.py：
+- 创建验证目录 `{output-dir}/verify/`
+- 放入 PyTorch 参考代码、基线代码、优化后代码
+- 执行两次精度比对（基线 vs PyTorch，优化后 vs PyTorch）
+- 两次都通过 → 继续 Step 6
+- 任一失败 → 返回失败
+
+### Step 6: 性能验证
+
+调用 kernel-verifier skill 的 benchmark.py：
+- 分别测试基线和优化后的性能
+- 计算 speedup = baseline_latency / optimized_latency
+- speedup ≥ 1.0（性能不劣化）→ 返回成功
+- speedup < 1.0 → 返回失败
+
+### Step 7: 返回结果
+
+输出 JSON 格式的执行结果：
+
+```json
+{
+    "success": true,
+    "optimization_point_index": 1,
+    "optimization_point_name": "入参静态化优化",
+    "speedup": 1.05,
+    "baseline_latency_ms": 1.23,
+    "optimized_latency_ms": 1.17,
+    "attempt_dir": "./opt_iter_0",
+    "message": "优化成功，性能提升 5%"
+}
+```
+
+或失败时：
+
+```json
+{
+    "success": false,
+    "optimization_point_index": 1,
+    "optimization_point_name": "入参静态化优化",
+    "speedup": 0.0,
+    "failure_reason": "精度验证失败",
+    "attempt_dir": "./opt_iter_0",
+    "message": "优化后精度不匹配，放弃本次优化"
+}
+```
+
+---
+
+## 目录结构要求
 
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → ... → 12
-2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
-   - 未命中 → 跳过，检查下一优化点
-   - 命中 → 参考对应文档，应用优化策略
-3. 应用优化后，必须加载 references/checklist.md 检查代码规范
-4. 如果代码规范不满足 → 修改代码直到满足规范
-5. 代码规范满足后 → 返回优化后的代码
+{output-dir}/
+├── optimized_code.py            # 优化后的代码
+├── verify/
+│   ├── {op_name}_torch.py       # PyTorch 参考
+│   ├── {op_name}_triton_baseline.py  # 基线代码
+│   └── {op_name}_triton_optimized.py # 优化后代码
+├── baseline_perf_result.json     # 基线性能结果
+├── optimized_perf_result.json    # 优化后性能结果
+└── log.md                       # 本轮优化日志
 ```
 
-**重要约束**：
-- ⚠️ **只能使用本 skill 规定的优化方式，禁止使用任何超出本 skill 之外的优化方式**
-- ⚠️ **必须先命中优化点的「命中条件」，才能加载参考文档；未命中则跳过**
-- 一次优化迭代只能使用一个优化点
-- 一次只能参考一个文档
+---
 
-## 优化验证规则
+## 验证规则
 
-**⚠️ 强制要求：在进行任何精度验证或性能验证之前，必须先执行 checklist 检查，确保所有代码规范都已满足。验证流程如下：**
+### 精度验证
 
-1. **Checklist 检查**：加载 `references/checklist.md`，逐项检查代码是否满足所有规范要求
-2. **不满足规范** → 修改代码直到满足所有规范要求，然后重新执行 checklist 检查确认
-3. **满足规范后** → 执行精度验证和性能验证
+- 基线 vs PyTorch：必须通过
+- 优化后 vs PyTorch：必须通过
+- 任一不通过 → 优化失败
 
-- **成功**：优化后的性能不劣化（speedup ≥ 1.0），该优化结果作为下一次优化迭代的基线
-- **失败**：优化后的性能劣化（speedup < 1.0），放弃本次优化结果，以优化前的代码作为下一次优化迭代的基线
+### 性能验证
 
-## 参考资料索引
+- speedup = baseline_latency / optimized_latency
+- speedup ≥ 1.0 → 成功（性能不劣化即视为成功）
+- speedup < 1.0 → 失败（性能劣化）
 
-| 文档类型 | 文档路径 |
-|----------|----------|
-| 入参静态化优化 | `references/constexpr_parameters.md` |
-| Tiling 优化 | `references/tiling_optimization.md` |
-| 分核优化 | `references/vector_core_partition.md` |
-| 离散访存优化 | `references/discrete_memory_access.md` |
-| Scalar 转 Vector 优化 | `references/scalar_to_vector.md` |
-| Pass 合并优化 | `references/pass-merge.md` |
-| 维度合并优化 | `references/dimension-merge.md` |
-| Libdevice 函数使用 | `references/libdevice-usage.md` |
-| 循环不变量外提 | `references/loop-invariant-hoisting.md` |
-| Load 指令重排序 | `references/load-order.md` |
-| BLOCK_SIZE 调优 | `references/block_size_tuning.md` |
-| Autotune 自动调优 | `references/autotune.md` |
-| 代码规范检查 | `references/checklist.md` |
+---
+
+## 关键约束
+
+1. **只能执行指定的优化点**，不能同时执行多个
+2. **必须先验证命中条件**，未命中则不能执行
+3. **精度验证必须通过**，否则优化失败
+4. **性能不劣化即视为成功**
+5. **禁止使用本 skill 之外的优化方式**
+
+---
+
+## 沟通风格
+
+- 简洁、专业
+- 执行过程清晰汇报
+- 结果明确（成功/失败及原因）

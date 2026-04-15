@@ -15,6 +15,7 @@ skills:
   - kernel-designer
   - kernel-generator
   - kernel-verifier
+  - latency-analyzer
   - latency-optimizer
 ---
 
@@ -219,14 +220,36 @@ while iteration < max_iterations:
 
 ⚠️ **Phase 4 是必须执行的阶段，禁止跳过。** Phase 3 验证通过后，无论性能数据如何，都必须进入 Phase 4 尝试优化。
 
+### 子Agent职责拆分
+
+| Agent | 职责 | 输入 | 输出 |
+|-------|------|------|------|
+| latency-analyzer（优化分析） | 瓶颈分析 + 生成todo-optim.txt | 代码文件 | todo-optim.txt + 分析报告 |
+| latency-optimizer（优化执行） | 单点优化 + 验证 | 代码 + 优化点序号 | 优化结果JSON |
+
 ### 状态变量
 
 ```
 opt_iteration = 0
 best_code = ""
-best_speedup = 0.0
+best_speedup = 1.0
 baseline_code = Phase 3 产出的 generated_code.py
 improvement_made = false
+todo_optim_path = {工作目录}/todo-optim.txt
+```
+
+### 目录命名规范
+
+```
+opt_iter_{N}/                           # 第N轮优化迭代（每轮一个优化点）
+├── optimized_code.py                   # 优化后的代码
+├── verify/
+│   ├── {op_name}_torch.py             # PyTorch参考
+│   ├── {op_name}_triton_baseline.py   # 当前基线代码
+│   └── {op_name}_triton_optimized.py  # 优化后代码
+├── baseline_perf_result.json           # 基线性能
+├── optimized_perf_result.json          # 优化后性能
+└── log.md                              # 本轮优化日志
 ```
 
 ### 迭代循环
@@ -234,81 +257,114 @@ improvement_made = false
 ```
 while True:
 
-    ── 4.1 代码分析 + 优化策略 + 代码重写 ────────────
+    ── 4.1 优化分析（调用 latency-analyzer）──────────────
+    调用 latency-analyzer skill
+
+    输入:
+      - code-file-path: 当前基线代码路径
+      - todo-optim-file-path: todo_optim_path
+
+    latency-analyzer 输出:
+      - 瓶颈分析报告
+      - todo-optim.txt（包含12个优化点状态）
+
+    分析完成后 → 进入 4.2
+
+    ── 4.2 选择优化点 ──────────────────────────────────
+    主agent读取 todo-optim.txt
+
+    选择规则：
+      - 按序号从小到大遍历
+      - 选择第一个 status = pending 的优化点
+      - 如果所有优化点都不是 pending → 跳到 4.8 终局判定
+
+    找到待执行优化点 → 进入 4.3
+
+    ── 4.3 优化执行（调用 latency-optimizer）────────────
     调用 latency-optimizer skill
 
-    latency-optimizer 报告无更多优化点:
-      → 终止优化，进入 4.6 终局判定
+    输入:
+      - code-file-path: 当前基线代码路径
+      - optimization-point-index: 选中的优化点序号
+      - output-dir: {工作目录}/output/opt_iter_{opt_iteration}
+      - op-name: {算子名称}
 
-    根据优化点进行代码优化重写
-    产物 → {工作目录}/output/opt_iter_{opt_iteration}/optimized_code.py
+    latency-optimizer 执行:
+      1. 验证命中条件
+      2. 应用优化
+      3. Checklist 检查
+      4. 精度验证（基线 vs PyTorch，优化后 vs PyTorch）
+      5. 性能验证（计算 speedup）
 
-    checklist 检查:
-      读取latency-optimizer skill 中的references\checklist.md，获取代码规范 checklist
-      验证 optimized_code.py 是否满足所有代码规范
-      不满足 → 修改代码直至满足规范 → 重新检查
-      满足 → 进入 4.2 双重验证
-    
-    复制 → {工作目录}/output/optimized_code.py
+    latency-optimizer 输出:
+      {
+        "success": true/false,
+        "speedup": 1.05,
+        "optimization_point_index": 1,
+        "attempt_dir": "./opt_iter_0",
+        "message": "..."
+      }
 
-    ── 4.2 双重验证 ──────────────────────────────────
-    调用 kernel-verifier skill 执行两次精度比对
+    ── 4.4 结果处理 ──────────────────────────────────
+    根据 latency-optimizer 返回的 success:
 
-    在 {工作目录}/output/opt_iter_{opt_iteration}/verify/ 下创建:
-      - {op_name}_torch.py              (PyTorch 参考)
-      - {op_name}_triton_baseline.py    (Phase 3 基线)
-      - {op_name}_triton_optimized.py   (优化后)
-
-    第一次: verify.py --triton_impl_name triton_baseline
-    第二次: verify.py --triton_impl_name triton_optimized
-
-    两次都通过 → 继续 4.3
-    任一失败   → 跳到 4.5
-
-    ── 4.3 双重性能测试 ──────────────────────────────
-    调用 kernel-verifier skill (benchmark.py) 两次
-
-    第一次: benchmark --triton_impl_name triton_baseline
-      → baseline_perf_result.json
-    第二次: benchmark --triton_impl_name triton_optimized
-      → optimized_perf_result.json
-
-    计算 speedup_vs_baseline = baseline_latency / optimized_latency
-
-    ── 4.4 结果判定 ──────────────────────────────────
-
-    speedup_vs_baseline ≥ 1.0:
-      → 优化成功（性能不劣化即视为成功）
-      → 更新 best_code / best_speedup
+    success == true (speedup ≥ 1.0):
+      → 优化成功
+      → 更新 best_code 为优化后代码
+      → 更新 best_speedup
       → improvement_made = true
+      → 标记对应优化点为 completed
       → opt_iteration++，continue
+
+    success == false:
+      → 优化失败（精度不匹配或性能劣化）
+      → 丢弃优化后代码，保持基线不变
+      → 标记对应优化点为 failed
+      → 如果 attempt_count < max_attempts → 可重试
+      → opt_iteration++，continue
+
+    ── 4.5 同步状态 ──────────────────────────────────
+    主agent更新 todo-optim.txt:
+
+    对于执行的优化点（序号 = optimization_point_index）:
+      - status = completed (success) 或 failed (failure)
+      - last_attempt_dir = attempt_dir
+      - attempt_count++
+      - result = "success" 或 "failed"
+
+    更新全局状态:
+      - 如果 success: current_best_dir = attempt_dir
+      - 如果 success: current_best_speedup = speedup
+
+    ── 4.6 循环检查 ──────────────────────────────────
+    检查终止条件:
+
+    如果所有优化点状态都是 completed/failed/skipped:
+      → 退出优化循环，跳到 4.8
 
     否则:
-      → opt_iteration++，continue
+      → continue，返回 4.1
 
-    ── 4.5 分析决策 (验证失败时) ─────────────────────
-    A 类 (优化引入逻辑错误) → 回退，调整策略，continue
-    B 类 (环境错误) → 终止
-    C 类 (无法继续) → 终止
+    ── 4.7 （保留，未来扩展用）─────────────────────────
 
-    opt_iteration++
-    continue
-
-    ── 4.6 终局判定 ──────────────────────────────────
-    无优化点时退出判定：
+    ── 4.8 终局判定 ──────────────────────────────────
+    退出优化循环时判定:
 
     improvement_made == true:
-      → 优化成功，break，进入 Phase 5
+      → 优化成功，最终代码 = best_code
+      → break，进入 Phase 5
 
     improvement_made == false:
-      → 优化失败（做完所有尝试后没有效果），break，进入 Phase 5
+      → 优化失败（所有尝试后无效果），最终代码 = baseline_code
+      → break，进入 Phase 5
 ```
 
 ### Phase 4 终局处理
 
-- Phase 4 优化成功（improvement_made == true）→ 以 `optimized_code.py` 为最终结果
+- Phase 4 优化成功（improvement_made == true）→ 以 `best_code` 为最终结果
 - Phase 4 优化失败（improvement_made == false，做完所有尝试后没有效果）→ 以 Phase 3 的 `generated_code.py` 为最终结果
 - 两种情况都进入 Phase 5
+- 最终代码复制到 `{工作目录}/{op_name}_generated.py`
 
 ---
 
@@ -377,10 +433,11 @@ Phase 4 失败时（Phase 3 成功，优化未成功）：
 ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 ├── {op_name}.py                          # Phase 1: KernelBench 任务描述
 ├── sketch.txt                            # Phase 2: 算法草图
+├── todo-optim.txt                        # Phase 4: 优化待办清单
 ├── output/
 │   ├── generated_code.py                 # Phase 3 最终通过验证的代码（副本）
 │   ├── perf_result.json                  # Phase 3 最终性能报告（副本）
-│   ├── optimized_code.py                 # Phase 4 最终优化代码（副本，成功时）
+│   ├── optimized_code.py                 # Phase 4 最佳优化代码（副本，成功时）
 │   ├── iter_0/                           # Phase 3 第 0 轮
 │   │   ├── generated_code.py
 │   │   ├── verify/
@@ -426,9 +483,12 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 迭代策略 | 不做最大迭代次数限制，直到 latency-optimizer 报告无更多优化点则退出 |
-| Phase 4 成功底线 | 性能不劣化（speedup_vs_baseline ≥ 1.0） |
-| Phase 4 退出判定 | 有效果（speedup_vs_baseline ≥ 1.0）则成功；做完所有尝试后无效果则失败 |
+| Phase 4 迭代策略 | 不做最大迭代次数限制，直到所有优化点完成或跳过则退出 |
+| Phase 4 单点重试 | 每个优化点最多重试 2 次 |
+| Phase 4 成功底线 | 性能不劣化（speedup ≥ 1.0） |
+| Phase 4 退出判定 | 有效果（speedup ≥ 1.0）则成功；做完所有尝试后无效果则失败 |
+| Phase 4 目录命名 | 每轮优化迭代创建新目录 opt_iter_{N} |
+| Phase 4 状态同步 | 主agent维护todo-optim.txt，标记每个优化点的状态 |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |
