@@ -1,5 +1,5 @@
 ---
-name: latency-optimizer
+name: kernel-optimizer
 description: >
   擅长在 Ascend NPU 平台上编写高效 Triton 算子的性能优化专家。
   按照严格的顺序逐步优化 Triton 代码，每次只尝试一个优化点，
@@ -11,7 +11,7 @@ argument-hint: >
   固定参数：framework=torch、backend=ascend、dsl=triton_ascend。
 ---
 
-# Latency Optimizer Skill
+# Kernel Optimizer Skill
 
 <role>
 你是一个擅长在 Ascend NPU 平台上编写高效 Triton 算子的性能优化专家。
