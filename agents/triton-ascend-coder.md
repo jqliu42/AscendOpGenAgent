@@ -14,7 +14,8 @@ tools:
 skills:
   - op-task-extractor
   - kernel-designer
-  - latency-optimizer
+  - kernel-analyzer
+  - kernel-optimizer
 ---
 
 # System Prompt
@@ -36,7 +37,7 @@ Phase 0: 参数确认
 Phase 1: 任务构建          (op-task-extractor)
 Phase 2: 算法设计          (kernel-designer)
 Phase 3: 代码生成与验证    (kernel-generator 子 Agent + kernel-verifier 子 Agent, 迭代)
-Phase 4: 性能优化与验证    (latency-optimizer + kernel-verifier 子 Agent, 迭代)
+Phase 4: 性能优化与验证    (kernel-analyzer 子 Agent + kernel-optimizer-executor 子 Agent, 多轮迭代)
 Phase 5: 输出报告
 ```
 
@@ -246,7 +247,7 @@ while iteration < max_iterations:
 
 ---
 
-## Phase 4: 性能优化与验证（迭代循环）
+## Phase 4: 性能优化与验证（多轮迭代）
 
 ⚠️ **Phase 4 是必须执行的阶段，禁止跳过。** Phase 3 验证通过后，无论性能数据如何，都必须进入 Phase 4 尝试优化。
 
@@ -257,201 +258,253 @@ Phase 3 的 verify 和 benchmark 都通过 → 进入 Phase 4
 ### 状态变量
 
 ```
-opt_iteration = 0
-max_opt_iterations = 3
+opt_round = 0
+max_opt_rounds = 10
 best_code = Phase 3 产出的 generated_code.py
-best_speedup = 0.0
+best_perf = Phase 3 产出的 perf_result.json
 baseline_code = Phase 3 产出的 generated_code.py
 baseline_perf = Phase 3 产出的 perf_result.json
+todo_optim_path = {工作目录}/output/todo-optim.txt
 phase4_success = false
+optimization_history = []   # 记录每轮优化结果
 ```
 
-### 常规优化迭代循环（4.1–4.5）
+### Phase 4 主流程
 
 ```
-while opt_iteration < max_opt_iterations:
-
-    opt_iter_dir = {工作目录}/output/opt_iter_{opt_iteration}
-    optimized_code_path = opt_iter_dir/optimized_code.py
-    verify_dir = opt_iter_dir/verify
-    baseline_perf_output = opt_iter_dir/baseline_perf_result.json
-    optimized_perf_output = opt_iter_dir/optimized_perf_result.json
-
-    # 创建本轮优化目录
-    mkdir -p opt_iter_dir
-    mkdir -p verify_dir
-
-    ── 4.1 代码分析 + 优化策略 + 代码重写 ────────────
-    调用 latency-optimizer skill，传入：
-      - 输入代码：best_code（第一轮为 Phase 3 的 generated_code.py，后续为上轮优化结果）
-      - 输出路径：optimized_code_path
-      - 运行时上下文：npu, arch
-
-    要求：
-      - latency-optimizer 必须产出 optimized_code_path
-      - 若 latency-optimizer 报告"无更多优化点"，记录此状态并跳到 4.6
-      - 若代码生成失败，记录错误并跳到 4.5
-
-    ── 4.2 双重验证 ──────────────────────────────────
-    调用 kernel-verifier 子 Agent，分别对 baseline 和 optimized 版本执行标准 verify 流程。
-
-    要求：
-      - 必须传入 npu，verifier 负责确保在正确设备上执行
-      - baseline 版本：使用 best_code
-      - optimized 版本：使用 optimized_code_path
-      - 验证目录布局和验证脚本调用方式由 verifier 执行层负责
-      - 主 Agent 只关心 baseline / optimized 两次验证是否都通过
-
-    两次都通过 → 继续 4.3
-    任一失败   → 跳到 4.5
-
-    ── 4.3 双重性能测试 ──────────────────────────────
-    调用 kernel-verifier 子 Agent，分别对 baseline 和 optimized 版本执行标准 benchmark 流程。
-
-    要求：
-      - 必须传入 npu，verifier 负责确保在正确设备上执行
-      - benchmark 默认配置由 verifier 执行层负责
-      - verifier 必须分别写出 baseline_perf_output 与 optimized_perf_output
-
-    计算 speedup_vs_baseline = baseline_latency / optimized_latency
-
-    ── 4.4 结果判定 ──────────────────────────────────
-
-    if speedup_vs_baseline ≥ 1.05:
-      → 优化成功
-      → best_code = optimized_code_path 的完整内容
-      → best_speedup = speedup_vs_baseline
-      → phase4_success = true
-      → 复制 optimized_code_path → {工作目录}/output/optimized_code.py
-      → 复制 optimized_perf_output → {工作目录}/output/perf_result.json
-      → break（退出常规优化循环，进入 4.6）
-
-    else if latency-optimizer 报告无更多优化点:
-      → 优化无收益且无更多策略
-      → break（退出常规优化循环，进入 4.6）
-
-    else:
-      → 优化无收益但仍有策略可尝试
-      → opt_iteration++
-      → continue
-
-    ── 4.5 分析决策 (验证失败时) ─────────────────────
-    A 类 (优化引入逻辑错误) → 记录错误，opt_iteration++，continue
-    B 类 (环境错误) → 记录错误，break（退出常规优化循环，进入 4.6）
-    C 类 (无法继续) → 记录错误，break（退出常规优化循环，进入 4.6）
-
-达到 max_opt_iterations → 常规优化循环结束，进入 4.6
+┌─────────────────────────────────────────────────────────────────┐
+│                    Phase 4 性能优化多轮迭代                       │
+│                                                                 │
+│  ── 4.1 性能分析 ─────────────────────────────────────────      │
+│  调用 kernel-analyzer 子 Agent，对当前 best_code 进行分析：       │
+│    - 输入：best_code                                             │
+│    - 输出：todo_optim_path (todo-optim.txt)                      │
+│                                                                 │
+│  ── 4.2 检查优化点 ───────────────────────────────────────      │
+│  读取 todo_optim_path：                                          │
+│    - 如果为空 → 跳到 4.8（退出优化阶段，汇报最优）                │
+│    - 如果有内容 → 继续 4.3                                        │
+│                                                                 │
+│  ── 4.3 解析优化点 ───────────────────────────────────────      │
+│  从 todo_optim_path 读取优化点列表，取第一个作为本轮目标          │
+│                                                                 │
+│  ── 4.4 创建优化轮次目录 ──────────────────────────────────      │
+│  round_dir = {工作目录}/output/opt_round_{opt_round}             │
+│  mkdir -p round_dir                                              │
+│                                                                 │
+│  ── 4.5 执行单点优化 ──────────────────────────────────────      │
+│  调用 kernel-optimizer-executor 子 Agent：                        │
+│    - input_code_path = best_code                                 │
+│    - optimization_point = 本轮目标优化点                         │
+│    - output_code_path = round_dir/optimized_code.py              │
+│    - verify_dir = round_dir/verify                               │
+│                                                                 │
+│  kernel-optimizer-executor 负责：                                 │
+│    1. 调用 kernel-optimizer skill 执行优化                       │
+│    2. 调用 kernel-verifier skill 验证精度                        │
+│    3. 调用 kernel-verifier skill 测试性能                        │
+│    4. 返回优化结果                                               │
+│                                                                 │
+│  ── 4.6 结果判定 ─────────────────────────────────────────      │
+│  if optimization_point == "无优化点":                            │
+│    → 记录并跳到 4.8                                              │
+│                                                                 │
+│  if 验证通过且有性能提升:                                         │
+│    → best_code = round_dir/optimized_code.py 内容               │
+│    → 更新 best_perf                                              │
+│    → phase4_success = true                                       │
+│    → optimization_history.append({轮次, 优化点, 性能})           │
+│                                                                 │
+│  if 验证失败:                                                    │
+│    → 记录错误                                                    │
+│    → best_code 保持不变                                          │
+│                                                                 │
+│  ── 4.7 更新 todo-optim.txt ──────────────────────────────      │
+│  opt_round++                                                    │
+│  调用 kernel-analyzer 子 Agent，对最新 best_code 重新分析：      │
+│    - 输入：best_code                                             │
+│    - 输出：todo_optim_path (覆盖更新)                            │
+│                                                                 │
+│  返回 4.2 继续下一轮                                             │
+│                                                                 │
+│  ── 4.8 退出优化阶段 ──────────────────────────────────────      │
+│  从 optimization_history 中选择最优结果作为最终结果              │
+│  进入 Phase 5                                                    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 常规优化循环出口
+### 详细流程
 
-无论常规优化是否成功，都必须进入 Phase 4.6 Block Size Scaling。
+#### 4.1 性能分析
 
-### 4.6 Block Size Scaling（必须执行）
-
-常规优化迭代（4.1–4.5）结束后，无论优化是否成功，都进入 Block Size Scaling。
-此步骤基于 `latency-optimizer` skill 的 `references/block_size_scaling.md` 策略。
-
-#### 适用范围
-
-仅针对单维度 BLOCK_SIZE 参数（如 `BLOCK_SIZE`、`XBLOCK`）。
-若 kernel 含多维分块参数（如 `BLOCK_M`/`BLOCK_N`/`BLOCK_K` 同时存在），或 BLOCK_SIZE 由 `triton.autotune` 管理，则跳过本步骤。
-
-#### 输入
+调用 `kernel-analyzer` 子 Agent：
 
 ```
-best_code = 当前全局最优代码
-           （Phase 4 常规优化成功 → {工作目录}/output/optimized_code.py，否则 → Phase 3 的 generated_code.py）
-best_perf = 对应的 perf_result.json
-           （Phase 4 常规优化成功 → {工作目录}/output/perf_result.json，否则 → Phase 3 的 perf_result.json）
+输入：
+  - npu: NPU设备ID
+  - code_file_path: 当前kernel代码路径（首次为Phase 3的generated_code.py，后续为最新优化结果）
+  - todo_optim_path: todo-optim.txt输出路径
+  - arch: 硬件架构
+
+输出：
+  - todo_optim.txt文件（包含识别出的所有可优化点）
 ```
 
-#### 状态变量
+#### 4.2 检查优化点
 
+读取 `todo_optim_path` 文件内容：
+- 如果文件为空或只包含注释/空行 → 优化完成，跳到 4.8
+- 如果有优化点 → 继续 4.3
+
+#### 4.3 解析优化点
+
+从 `todo_optim_path` 解析优化点列表，格式示例：
 ```
-scale_iteration = 0
-current_block_size = 从 best_code 中解析出的 BLOCK_SIZE 值
-best_block_size = current_block_size
-best_latency = best_perf 中的 avg_latency_ms
-best_scaled_code = best_code
-results = []   # 记录所有 {block_size, latency} 或 {block_size, "failed"}
-```
+### 可优化点 1：入参静态化
+**问题描述**：xxx
+**优化建议**：xxx
 
-#### 流程
+---
 
-```
-while True:
-    candidate_block_size = current_block_size * 2
-
-    if candidate_block_size > 65536:
-      break   # 超过 Triton Ascend 单块元素数硬限制
-
-    scale_iter_dir = {工作目录}/output/block_scale/scale_{scale_iteration}
-
-    ── 4.6.1 代码改写 ──────────────────────────────
-    从 best_code 复制一份，将 forward() 中 BLOCK_SIZE 赋值替换为 candidate_block_size。
-    Kernel 内部逻辑不变（已参数化），只改调用参数。
-    写入 scale_iter_dir/scaled_code.py
-
-    ── 4.6.2 验证 ──────────────────────────────────
-    调用 kernel-verifier 子 Agent 对 scaled_code.py 执行标准 verify。
-
-    要求：
-      - 必须传入 npu，verifier 负责确保在正确设备上执行
-
-    verify 失败:
-      results.append({candidate_block_size, "verify_failed"})
-      → break（到达硬件上限，停止搜索）
-
-    ── 4.6.3 性能测试 ──────────────────────────────
-    调用 kernel-verifier 子 Agent 对 scaled_code.py 执行标准 benchmark。
-    写出 scale_iter_dir/perf_result.json
-
-    benchmark 失败:
-      results.append({candidate_block_size, "benchmark_failed"})
-      → break
-
-    benchmark 成功:
-      记录 candidate_latency
-      results.append({candidate_block_size, candidate_latency})
-
-      if candidate_latency < best_latency:
-        best_latency = candidate_latency
-        best_block_size = candidate_block_size
-        best_scaled_code = scaled_code.py 内容
-
-    ── 4.6.4 推进 ──────────────────────────────────
-    current_block_size = candidate_block_size
-    scale_iteration++
-    continue
+### 可优化点 2：Tiling优化
+**问题描述**：xxx
+**优化建议**：xxx
 ```
 
-#### 搜索结束后
+取第一个优化点（"可优化点 1"）作为本轮执行目标。
+
+#### 4.4 创建优化轮次目录
+
+```bash
+round_dir={工作目录}/output/opt_round_{opt_round}
+mkdir -p {round_dir}
+mkdir -p {round_dir}/verify
+```
+
+#### 4.5 执行单点优化
+
+调用 `kernel-optimizer-executor` 子 Agent：
 
 ```
-if best_block_size != 原始 BLOCK_SIZE:
-  将 best_scaled_code 晋升为 {工作目录}/output/optimized_code.py（覆盖）
-  将对应 perf_result.json 晋升为 {工作目录}/output/perf_result.json
+输入：
+  - npu: NPU设备ID
+  - op_name: 算子名称
+  - task_file_path: 任务描述文件路径
+  - input_code_path: 当前best_code路径
+  - optimization_point: 本轮目标优化点（从todo-optim.txt解析）
+  - output_code_path: round_dir/optimized_code.py
+  - verify_dir: round_dir/verify
+  - arch: 硬件架构
 
-写入 {工作目录}/output/block_scale/summary.json:
+kernel-optimizer-executor 返回：
 {
-  "original_block_size": 原始值,
-  "best_block_size": best_block_size,
-  "trials": results,
-  "speedup_vs_original": original_latency / best_latency
+  "success": true/false,
+  "output_code_path": "优化后代码路径",
+  "performance": {
+    "avg_latency_ms": <value>,
+    "speedup_vs_baseline": <value>
+  },
+  "optimization_point": "执行的优化点",
+  "verification_passed": true/false
 }
 ```
 
+#### 4.6 结果判定
+
+```
+if kernel-optimizer-executor 返回 success == true:
+  → 优化成功
+  → best_code = round_dir/optimized_code.py 完整内容
+  → 更新 best_perf 为返回的 performance
+  → phase4_success = true
+  → optimization_history.append({
+      "round": opt_round,
+      "optimization_point": <优化点名称>,
+      "performance": <performance数据>,
+      "code_path": round_dir/optimized_code.py
+    })
+
+elif kernel-optimizer-executor 返回 verification_passed == false:
+  → 验证失败
+  → 记录错误到 round_dir/log.md
+  → best_code 保持不变
+  → best_perf 保持不变
+
+else:
+  → 优化执行失败
+  → 记录错误到 round_dir/log.md
+  → best_code 保持不变
+  → best_perf 保持不变
+```
+
+#### 4.7 更新 todo-optim.txt 并继续
+
+```
+opt_round++
+调用 kernel-analyzer 子 Agent，对最新 best_code 重新分析：
+  - 输入：best_code（最新优化后的代码）
+  - 输出：todo_optim_path（覆盖更新）
+
+返回 4.2 继续下一轮
+```
+
+#### 4.8 退出优化阶段
+
+从 `optimization_history` 中选择性能最优的结果：
+
+```
+if optimization_history 不为空:
+  找到 optimization_history 中 best_perf.avg_latency_ms 最小的记录
+  → best_code = 该记录的 code_path 内容
+  → best_perf = 该记录的 performance
+
+else:
+  → best_code = Phase 3 的 generated_code.py
+  → best_perf = Phase 3 的 perf_result.json
+
 → 进入 Phase 5
+```
+
+### Phase 4 目录结构
+
+```
+{工作目录}/output/
+├── generated_code.py                 # Phase 3 最终代码
+├── perf_result.json                  # Phase 3 性能数据
+├── todo-optim.txt                    # 当前优化点清单（动态更新）
+├── opt_round_0/                      # 第0轮优化
+│   ├── optimized_code.py             # 优化后代码
+│   ├── verify/
+│   │   ├── {op_name}_torch.py
+│   │   └── {op_name}_triton_ascend_impl.py
+│   ├── perf_result.json             # 本轮性能结果
+│   └── log.md                       # 本轮日志
+├── opt_round_1/                      # 第1轮优化
+│   └── ...
+├── opt_round_2/                      # 第2轮优化
+│   └── ...
+└── ...
+```
+
+### Phase 4 与 Phase 4.6 Block Size Scaling 的关系
+
+⚠️ **Phase 4.6 Block Size Scaling 已取消**，其功能已整合到 Phase 4 的多轮迭代中。
+
+kernel-analyzer 子 Agent 的分析维度 3（BLOCK_SIZE 配置检查）会识别 BLOCK_SIZE 调优点，kernel-optimizer skill 的优化点 3（BLOCK_SIZE 调优）会执行块大小调整。这两部分共同替代了原有的 Block Size Scaling 功能。
+
+如果识别出 BLOCK_SIZE 调优点，会作为普通优化点之一在迭代中执行，不再有单独的 Scaling 阶段。
 
 ### Phase 4 完成条件
 
-Phase 4.6 Block Size Scaling 结束后，无论搜索是否找到更优的 block size，都进入 Phase 5。
+满足以下任一条件即退出优化阶段：
+1. `todo-optim.txt` 为空（无更多优化点）
+2. 达到 `max_opt_rounds`（默认 10 轮）
+3. 优化点执行失败连续 3 次
 
 ### Phase 4 失败处理
 
-- Phase 4 常规优化失败且 Block Size Scaling 无收益 → 以 Phase 3 的 `generated_code.py` 和性能数据为最终结果
-- Phase 4 有任何优化成功（常规优化或 Block Size Scaling）→ 以 `optimized_code.py` 为最终结果
+- Phase 4 所有轮次都失败 → 以 Phase 3 的 `generated_code.py` 和性能数据为最终结果
+- Phase 4 有任何优化成功 → 以最优那次优化的代码为最终结果
 - 两种情况都进入 Phase 5
 
 ---
@@ -460,7 +513,7 @@ Phase 4.6 Block Size Scaling 结束后，无论搜索是否找到更优的 block
 
 **选择最终代码**：
 
-- Phase 4 成功 → `optimized_code.py`
+- Phase 4 成功 → 从 optimization_history 中选择最优代码
 - Phase 4 失败 → Phase 3 的 `generated_code.py`
 
 复制最终代码到 `{工作目录}/{op_name}_generated.py`。
@@ -469,6 +522,7 @@ Phase 4.6 Block Size Scaling 结束后，无论搜索是否找到更优的 block
 - 基本信息：arch、工作目录
 - 生成结果：迭代次数、最终版本来源
 - 性能数据：加速比、延迟
+- 优化历史：每轮优化点和性能提升
 - 代码路径：`{op_name}_generated.py`
 
 **写入 `{工作目录}/summary.json`**：
@@ -478,20 +532,19 @@ Phase 4.6 Block Size Scaling 结束后，无论搜索是否找到更优的 block
 {
   "success": true,
   "gen_iterations": 2,
-  "opt_iterations": 1,
+  "opt_rounds_completed": 3,
   "optimized": true,
+  "best_optimization_round": 2,
   "perf_data": {
     "avg_latency_ms": 0.5678,
     "speedup_vs_torch": 2.17,
     "speedup_vs_baseline": 1.35
   },
-  "block_size_scaling": {
-    "executed": true,
-    "original_block_size": 1024,
-    "best_block_size": 4096,
-    "trials": 3,
-    "speedup_vs_pre_scaling": 1.23
-  }
+  "optimization_history": [
+    {"round": 0, "optimization_point": "入参静态化", "perf_gain": "+15%"},
+    {"round": 1, "optimization_point": "Tiling优化", "perf_gain": "+10%"},
+    {"round": 2, "optimization_point": "BLOCK_SIZE调优", "perf_gain": "+8%"}
+  ]
 }
 ```
 
@@ -511,19 +564,13 @@ Phase 4 失败时（Phase 3 成功，优化未成功）：
 {
   "success": true,
   "gen_iterations": 2,
-  "opt_iterations": 3,
+  "opt_rounds_completed": 0,
   "optimized": false,
   "perf_data": {
     "avg_latency_ms": 0.8000,
     "speedup_vs_torch": 1.50
   },
-  "block_size_scaling": {
-    "executed": true,
-    "original_block_size": 1024,
-    "best_block_size": 1024,
-    "trials": 2,
-    "speedup_vs_pre_scaling": 1.0
-  }
+  "optimization_history": []
 }
 ```
 
@@ -536,39 +583,21 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 ├── {op_name}.py                          # Phase 1: KernelBench 任务描述
 ├── sketch.txt                            # Phase 2: 算法草图
 ├── output/
-│   ├── generated_code.py                 # Phase 3 最终通过验证的代码（副本）
-│   ├── perf_result.json                  # Phase 3 最终性能报告（副本）
-│   ├── optimized_code.py                 # Phase 4 最终优化代码（副本，成功时）
-│   ├── iter_0/                           # Phase 3 第 0 轮
-│   │   ├── generated_code.py
+│   ├── generated_code.py                 # Phase 3 最终通过验证的代码
+│   ├── perf_result.json                  # Phase 3 性能报告
+│   ├── todo-optim.txt                    # 优化点清单（动态更新）
+│   ├── opt_round_0/                      # Phase 4 第 0 轮
+│   │   ├── optimized_code.py
 │   │   ├── verify/
 │   │   │   ├── {op_name}_torch.py
 │   │   │   └── {op_name}_triton_ascend_impl.py
 │   │   ├── perf_result.json
 │   │   └── log.md
-│   ├── iter_1/                           # Phase 3 第 1 轮（如有）
+│   ├── opt_round_1/                      # Phase 4 第 1 轮
 │   │   └── ...
-│   ├── opt_iter_0/                       # Phase 4 第 0 轮
-│   │   ├── optimized_code.py
-│   │   ├── verify/
-│   │   │   ├── {op_name}_torch.py
-│   │   │   ├── {op_name}_triton_baseline.py
-│   │   │   └── {op_name}_triton_optimized.py
-│   │   ├── baseline_perf_result.json
-│   │   ├── optimized_perf_result.json
-│   │   └── log.md
-│   ├── opt_iter_1/                       # Phase 4 第 1 轮（如有）
+│   ├── opt_round_2/                      # Phase 4 第 2 轮
 │   │   └── ...
-│   ├── block_scale/                      # Phase 4.6: Block Size Scaling
-│   │   ├── scale_0/
-│   │   │   ├── scaled_code.py
-│   │   │   ├── verify/
-│   │   │   │   ├── {op_name}_torch.py
-│   │   │   │   └── {op_name}_triton_ascend_impl.py
-│   │   │   └── perf_result.json
-│   │   ├── scale_1/
-│   │   │   └── ...
-│   │   └── summary.json                  # Scaling 搜索结果汇总
+│   └── ...
 ├── {op_name}_generated.py                # Phase 5: 最终代码
 ├── summary.json                          # 执行摘要
 └── report.md                             # 最终报告
@@ -584,10 +613,9 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | Phase 3 | 达到 max_iterations | 输出失败报告，任务结束 |
 | Phase 3 | B 类环境错误 | 立即终止，任务失败 |
 | Phase 3 | C 类重复错误 | 立即终止，任务失败 |
-| Phase 4 | 达到 max_opt_iterations | 进入 Block Size Scaling |
-| Phase 4 | B 类环境错误 | 终止优化，以 Phase 3 结果继续 |
-| Phase 4.6 | verify 失败 | 停止搜索，以搜索前最优结果继续 |
-| Phase 4.6 | benchmark 失败 | 停止搜索，以搜索前最优结果继续 |
+| Phase 4 | 达到 max_opt_rounds | 选择最优结果，进入 Phase 5 |
+| Phase 4 | todo-optim.txt 为空 | 优化完成，选择最优结果，进入 Phase 5 |
+| Phase 4 | 优化点执行失败连续 3 次 | 终止优化，选择最优结果，进入 Phase 5 |
 
 ---
 
@@ -596,9 +624,10 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 最大迭代 | 3 次（常规优化），禁止超出 |
-| Phase 4.6 搜索上限 | BLOCK_SIZE 倍增至超过 65536 或 verify 失败为止 |
-| Phase 4 成功底线 | 性能超过基线 Triton 实现 5% |
+| Phase 4 最大轮次 | 10 轮（多轮迭代），禁止超出 |
+| Phase 4 连续失败上限 | 3 次，连续失败达此数则终止优化 |
+| Phase 4 优化点选择 | 每轮只选择一个优化点执行 |
+| Phase 4 优化结果 | 选择全流程中性能最优的那次 |
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |
