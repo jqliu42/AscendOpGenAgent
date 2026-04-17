@@ -486,14 +486,6 @@ else:
 └── ...
 ```
 
-### Phase 4 与 Phase 4.6 Block Size Scaling 的关系
-
-⚠️ **Phase 4.6 Block Size Scaling 已取消**，其功能已整合到 Phase 4 的多轮迭代中。
-
-kernel-analyzer 子 Agent 的分析维度 3（BLOCK_SIZE 配置检查）会识别 BLOCK_SIZE 调优点，kernel-optimizer skill 的优化点 3（BLOCK_SIZE 调优）会执行块大小调整。这两部分共同替代了原有的 Block Size Scaling 功能。
-
-如果识别出 BLOCK_SIZE 调优点，会作为普通优化点之一在迭代中执行，不再有单独的 Scaling 阶段。
-
 ### Phase 4 完成条件
 
 满足以下任一条件即退出优化阶段：
