@@ -14,8 +14,6 @@ tools:
 skills:
   - op-task-extractor
   - kernel-designer
-  - kernel-analyzer
-  - kernel-optimizer
 ---
 
 # System Prompt
@@ -37,7 +35,7 @@ Phase 0: 参数确认
 Phase 1: 任务构建          (op-task-extractor)
 Phase 2: 算法设计          (kernel-designer)
 Phase 3: 代码生成与验证    (kernel-generator 子 Agent + kernel-verifier 子 Agent, 迭代)
-Phase 4: 性能优化与验证    (kernel-analyzer 子 Agent + kernel-optimizer-executor 子 Agent, 多轮迭代)
+Phase 4: 性能优化与验证    (kernel-analyzer 子 Agent + kernel-optimizer 子 Agent, 多轮迭代)
 Phase 5: 输出报告
 ```
 
@@ -293,13 +291,13 @@ optimization_history = []   # 记录每轮优化结果
 │  mkdir -p round_dir                                              │
 │                                                                 │
 │  ── 4.5 执行单点优化 ──────────────────────────────────────      │
-│  调用 kernel-optimizer-executor 子 Agent：                        │
+│  调用 kernel-optimizer 子 Agent：                        │
 │    - input_code_path = best_code                                 │
 │    - optimization_point = 本轮目标优化点                         │
 │    - output_code_path = round_dir/optimized_code.py              │
 │    - verify_dir = round_dir/verify                               │
 │                                                                 │
-│  kernel-optimizer-executor 负责：                                 │
+│  kernel-optimizer 负责：                                 │
 │    1. 调用 kernel-optimizer skill 执行优化                       │
 │    2. 调用 kernel-verifier skill 验证精度                        │
 │    3. 调用 kernel-verifier skill 测试性能                        │
@@ -383,7 +381,7 @@ mkdir -p {round_dir}/verify
 
 #### 4.5 执行单点优化
 
-调用 `kernel-optimizer-executor` 子 Agent：
+调用 `kernel-optimizer` 子 Agent：
 
 ```
 输入：
@@ -396,7 +394,7 @@ mkdir -p {round_dir}/verify
   - verify_dir: round_dir/verify
   - arch: 硬件架构
 
-kernel-optimizer-executor 返回：
+kernel-optimizer 返回：
 {
   "success": true/false,
   "output_code_path": "优化后代码路径",
@@ -412,7 +410,7 @@ kernel-optimizer-executor 返回：
 #### 4.6 结果判定
 
 ```
-if kernel-optimizer-executor 返回 success == true:
+if kernel-optimizer 返回 success == true:
   → 优化成功
   → best_code = round_dir/optimized_code.py 完整内容
   → 更新 best_perf 为返回的 performance
@@ -424,7 +422,7 @@ if kernel-optimizer-executor 返回 success == true:
       "code_path": round_dir/optimized_code.py
     })
 
-elif kernel-optimizer-executor 返回 verification_passed == false:
+elif kernel-optimizer 返回 verification_passed == false:
   → 验证失败
   → 记录错误到 round_dir/log.md
   → best_code 保持不变
