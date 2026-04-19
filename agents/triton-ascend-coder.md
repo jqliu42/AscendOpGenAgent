@@ -367,6 +367,12 @@ optimization_history = []   # 记录每轮优化结果
   - todo_optim_path: todo-optim.txt路径
   - arch: 硬件架构
   - optimization_result: 本轮优化结果
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "success" | "failed",
+      "speedup": <加速比，仅 success 时>,
+      "reason": <失败原因，仅 failed 时>
+    }
 
 输出：
   - todo-optim.txt文件（更新，移除已处理优化点，添加新识别的优化点）
@@ -472,7 +478,12 @@ if kernel-optimizer 返回 success == true:
       "code_path": round_dir/optimized_code.py
     })
   → 记录加速比：speedup = best_perf.avg_latency_ms / baseline_perf.avg_latency_ms
-  → 准备 optimization_result 传递给 kernel-analyzer
+  → 准备 optimization_result 传递给 kernel-analyzer：
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "success",
+      "speedup": <加速比，如 1.25 表示性能提升 25%>
+    }
 
 elif kernel-optimizer 返回 verification_passed == false:
   → 验证失败
@@ -480,7 +491,12 @@ elif kernel-optimizer 返回 verification_passed == false:
   → best_code 保持不变
   → best_perf 保持不变
   → 记录失败原因：kernel-optimizer 返回的 error 信息
-  → 准备 optimization_result 传递给 kernel-analyzer
+  → 准备 optimization_result 传递给 kernel-analyzer：
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "failed",
+      "reason": <失败原因>
+    }
 
 else:
   → 优化执行失败或性能劣化
@@ -488,7 +504,12 @@ else:
   → best_code 保持不变
   → best_perf 保持不变
   → 若有性能数据，记录劣化加速比；若无，记录失败原因
-  → 准备 optimization_result 传递给 kernel-analyzer
+  → 准备 optimization_result 传递给 kernel-analyzer：
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "failed",
+      "reason": <失败原因或性能劣化说明>
+    }
 ```
 
 #### 4.7 更新 todo-optim.txt 并继续
@@ -505,8 +526,9 @@ opt_round++
   - optimization_result: 本轮优化结果
     {
       "optimization_point": <优化点序号和名称>,
-      "status": "success"/"failed",
-      "reason": <失败原因，如有>
+      "status": "success" | "failed",
+      "speedup": <加速比，仅 success 时>,
+      "reason": <失败原因，仅 failed 时>
     }
 
 kernel-analyzer 职责：

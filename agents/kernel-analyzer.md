@@ -46,9 +46,16 @@ skills:
   {
     "optimization_point": "序号: 维度名称",
     "status": "success" | "failed",
+    "speedup": 1.25,
     "reason": "失败原因（仅 status 为 failed 时需要）"
   }
   ```
+
+  **字段说明**：
+  - `optimization_point`：优化点标识
+  - `status`：优化结果状态
+  - `speedup`：加速比（仅 success 时），如 1.25 表示性能提升 25%
+  - `reason`：失败原因（仅 failed 时）
 
 ---
 
