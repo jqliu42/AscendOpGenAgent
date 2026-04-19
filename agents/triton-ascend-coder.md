@@ -133,7 +133,6 @@ while iteration < max_iterations:
 
     要求：
       - kernel-generator 子 Agent 负责输入校验、调用对应 skill，并将完整代码写入 generated_code_path
-      - 代码生成规则以 `kernel-generator` skill 为准
 
     若 generated_code_path 未生成:
       verifier_error = "A-GenerationFailed: 子 Agent 未产出代码文件"
@@ -145,7 +144,6 @@ while iteration < max_iterations:
     要求：
       - 必须传入 npu，verifier 负责确保在正确设备上执行
       - verifier 负责参数校验、标准验证目录准备和标准验证流程执行
-      - 验证规则与脚本调用方式以 `kernel-verifier` skill 为准
 
     验证通过:
       将 generated_code_path 晋升为 {工作目录}/output/generated_code.py
@@ -298,10 +296,10 @@ optimization_history = []   # 记录每轮优化结果
 │    - verify_dir = round_dir/verify                               │
 │                                                                 │
 │  kernel-optimizer 负责：                                 │
-│    1. 调用 kernel-optimizer skill 执行优化                       │
-│    2. 调用 kernel-verifier skill 验证精度                        │
-│    3. 调用 kernel-verifier skill 测试性能                        │
-│    4. 返回优化结果                                               │
+│    1. 执行单个优化点对代码进行优化                        │
+│    2. 验证优化后代码的精度                                │
+│    3. 测试优化后代码的性能                                │
+│    4. 返回优化结果                                        │
 │                                                                 │
 │  ── 4.6 结果判定 ─────────────────────────────────────────      │
 │  if optimization_point == "无优化点":                            │
@@ -312,10 +310,14 @@ optimization_history = []   # 记录每轮优化结果
 │    → 更新 best_perf                                              │
 │    → phase4_success = true                                       │
 │    → optimization_history.append({轮次, 优化点, 性能})           │
+│    → 在 todo-optim.txt 中标记该优化点为"完成"                    │
+│    → 记录相比优化前的加速比                                       │
 │                                                                 │
-│  if 验证失败:                                                    │
+│  if 验证失败或性能劣化:                                           │
 │    → 记录错误                                                    │
 │    → best_code 保持不变                                          │
+│    → 在 todo-optim.txt 中标记该优化点为"尝试失败"                │
+│    → 记录失败原因或劣化加速比                                     │
 │                                                                 │
 │  ── 4.7 更新 todo-optim.txt ──────────────────────────────      │
 │  opt_round++                                                    │
@@ -421,18 +423,24 @@ if kernel-optimizer 返回 success == true:
       "performance": <performance数据>,
       "code_path": round_dir/optimized_code.py
     })
+  → 在 todo-optim.txt 中标记该优化点为"完成"
+  → 记录加速比：speedup = best_perf.avg_latency_ms / baseline_perf.avg_latency_ms
 
 elif kernel-optimizer 返回 verification_passed == false:
   → 验证失败
   → 记录错误到 round_dir/log.md
   → best_code 保持不变
   → best_perf 保持不变
+  → 在 todo-optim.txt 中标记该优化点为"尝试失败"
+  → 记录失败原因：kernel-optimizer 返回的 error 信息
 
 else:
-  → 优化执行失败
+  → 优化执行失败或性能劣化
   → 记录错误到 round_dir/log.md
   → best_code 保持不变
   → best_perf 保持不变
+  → 在 todo-optim.txt 中标记该优化点为"尝试失败"
+  → 若有性能数据，记录劣化加速比；若无，记录失败原因
 ```
 
 #### 4.7 更新 todo-optim.txt 并继续
@@ -473,8 +481,9 @@ else:
 ├── opt_round_0/                      # 第0轮优化
 │   ├── optimized_code.py             # 优化后代码
 │   ├── verify/
-│   │   ├── {op_name}_torch.py
-│   │   └── {op_name}_triton_ascend_impl.py
+│   │   ├── {op_name}_torch.py        # PyTorch 参考实现
+│   │   ├── {op_name}_triton_baseline.py   # 基线 Triton 版本（本轮优化前的代码）
+│   │   └── {op_name}_triton_optimized.py  # 优化后 Triton 版本
 │   ├── perf_result.json             # 本轮性能结果
 │   └── log.md                       # 本轮日志
 ├── opt_round_1/                      # 第1轮优化
@@ -573,22 +582,34 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 ├── {op_name}.py                          # Phase 1: KernelBench 任务描述
 ├── sketch.txt                            # Phase 2: 算法草图
 ├── output/
-│   ├── generated_code.py                 # Phase 3 最终通过验证的代码
-│   ├── perf_result.json                  # Phase 3 性能报告
+│   ├── generated_code.py                 # 最终最优代码（Phase 3 或 Phase 4 最优版本）
+│   ├── perf_result.json                  # 最终性能报告
 │   ├── todo-optim.txt                    # 优化点清单（动态更新）
-│   ├── opt_round_0/                      # Phase 4 第 0 轮
-│   │   ├── optimized_code.py
+│   ├── iter_0/                           # Phase 3 第 0 轮迭代
+│   │   ├── generated_code.py
 │   │   ├── verify/
 │   │   │   ├── {op_name}_torch.py
 │   │   │   └── {op_name}_triton_ascend_impl.py
 │   │   ├── perf_result.json
 │   │   └── log.md
-│   ├── opt_round_1/                      # Phase 4 第 1 轮
+│   ├── iter_1/                           # Phase 3 第 1 轮迭代
 │   │   └── ...
-│   ├── opt_round_2/                      # Phase 4 第 2 轮
+│   ├── iter_2/                           # Phase 3 第 2 轮迭代
+│   │   └── ...
+│   ├── opt_round_0/                      # Phase 4 第 0 轮优化
+│   │   ├── optimized_code.py
+│   │   ├── verify/
+│   │   │   ├── {op_name}_torch.py        # PyTorch 参考实现
+│   │   │   ├── {op_name}_triton_baseline.py   # 基线 Triton 版本（本轮优化前的代码）
+│   │   │   └── {op_name}_triton_optimized.py  # 优化后 Triton 版本
+│   │   ├── perf_result.json
+│   │   └── log.md
+│   ├── opt_round_1/                      # Phase 4 第 1 轮优化
+│   │   └── ...
+│   ├── opt_round_2/                      # Phase 4 第 2 轮优化
 │   │   └── ...
 │   └── ...
-├── {op_name}_generated.py                # Phase 5: 最终代码
+├── {op_name}_generated.py                # Phase 5: 最终代码（与 generated_code.py 相同）
 ├── summary.json                          # 执行摘要
 └── report.md                             # 最终报告
 ```
@@ -613,6 +634,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 
 | 约束 | 说明 |
 |------|------|
+| ⚠️ **禁止自行执行核心任务** | **代码生成、性能优化、精度验证、性能测试必须通过子 Agent 完成，禁止主 Agent 自行执行。违反此约束将导致任务失败。** |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
 | Phase 4 最大轮次 | 10 轮（多轮迭代），禁止超出 |
 | Phase 4 连续失败上限 | 3 次，连续失败达此数则终止优化 |
@@ -621,7 +643,6 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | A 类连续上限 | 同一子类型连续 ≥ 3 次 → 自动终止 |
 | 禁止 PyTorch 退化 | forward() 中禁止 torch.*/F.* 计算操作 |
 | 文件操作范围 | 限制在工作目录内 |
-| 验证方式 | 必须调用 kernel-verifier 子 Agent 及其标准脚本，禁止自创测试 |
 | 语言 | 思考、分析、日志使用中文；代码、路径使用英文 |
 | 时间戳/随机数 | 必须通过 bash 获取，禁止 LLM 模拟 |
 
