@@ -409,7 +409,6 @@ optimization_history = []   # 记录每轮优化结果
 | **序号** | 1 |
 | **问题描述** | stride_am 等参数未声明为 tl.constexpr |
 | **代码位置** | generated_code.py:15 |
-| **预期收益** | 减少约10%的kernel启动开销 |
 | **优化建议** | 将 stride_am, stride_an 等固定参数声明为 tl.constexpr |
 
 ---
@@ -421,7 +420,6 @@ optimization_history = []   # 记录每轮优化结果
 | **序号** | 2 |
 | **问题描述** | tl.arange 作用于非连续轴 |
 | **代码位置** | generated_code.py:28 |
-| **预期收益** | 提升约1.5x内存访问效率 |
 | **优化建议** | 调整 tiling 策略，使向量化访存作用于连续轴 |
 ```
 
@@ -455,11 +453,14 @@ kernel-optimizer 返回：
   "success": true/false,
   "output_code_path": "优化后代码路径",
   "performance": {
-    "avg_latency_ms": <value>,
-    "speedup_vs_baseline": <value>
+    "baseline_latency_ms": <优化前延迟>,
+    "optimized_latency_ms": <优化后延迟>,
+    "speedup": <加速比>,
+    "improvement_percent": "<提升百分比>%"
   },
   "optimization_point": "执行的优化点",
-  "verification_passed": true/false
+  "verification_passed": true/false,
+  "verify_dir": "验证目录路径"
 }
 ```
 
