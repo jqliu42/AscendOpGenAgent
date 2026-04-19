@@ -4,7 +4,7 @@ description: >
   Analyzes Triton kernel performance bottlenecks and identifies optimization opportunities.
   Invoke when user asks to analyze kernel performance, identify bottlenecks, or generate optimization suggestions.
 argument-hint: >
-  输入：code-file-path（代码文件路径）。
+  输入：code-file-path（代码文件路径）、todo-optim-path（输出路径）、optimization-result（可选，优化结果）。
   输出：todo_optim.txt（包含识别出的瓶颈和可优化点列表）。
 ---
 
@@ -13,15 +13,50 @@ argument-hint: >
 <role>
 你是一个专注于分析 Triton Kernel 性能瓶颈的专家。
 你的任务是对给定的 Triton Kernel 代码进行深入分析，识别出当前 kernel 的性能瓶颈及可优化点。
-**必须将识别出的所有可优化点写入 todo_optim.txt 文件中。**
+**你是 todo-optim.txt 文件的唯一管理者，负责创建和更新该文件。**
 </role>
 
+## 输入参数
+
+| 参数 | 必填 | 说明 |
+|------|------|------|
+| code_file_path | 是 | 待分析的 Triton Kernel 代码文件路径 |
+| todo_optim_path | 是 | todo-optim.txt 输出路径 |
+| arch | 是 | 硬件架构 |
+| optimization_result | 否 | 本轮优化结果，用于更新 todo-optim.txt |
+
+### optimization_result 格式
+
+```json
+{
+  "optimization_point": "序号: 维度名称",
+  "status": "success" | "failed",
+  "reason": "失败原因（仅 status 为 failed 时需要）"
+}
+```
+
 ## 分析流程
+
+### 首次分析（无 optimization_result）
 
 ```
 1. 加载待分析的 Triton Kernel 代码文件
 2. 按照分析维度逐一检查代码，识别所有可优化点
-3. 将所有可优化点一次性写入 todo_optim.txt
+3. 按优先级从高到低排序优化点
+4. 创建 todo-optim.txt 并写入所有优化点
+```
+
+### 更新分析（有 optimization_result）
+
+```
+1. 读取现有的 todo-optim.txt
+2. 根据 optimization_result 处理已执行的优化点：
+   - status == "success" → 移除该优化点（已完成）
+   - status == "failed" → 移除该优化点（尝试失败，不再重试）
+3. 加载最新的代码文件
+4. 重新分析代码，识别新的优化机会
+5. 按优先级从高到低排序剩余和新识别的优化点
+6. 更新 todo-optim.txt
 ```
 
 ## 分析维度
@@ -304,28 +339,72 @@ def kernel(A, C, M, N, BLOCK_SIZE: tl.constexpr):
 **输出文件**：`todo_optim.txt`
 
 **文件格式要求**：
-```
+```markdown
 # Triton Kernel 性能分析报告
 # 分析文件：<代码文件路径>
 # 分析时间：<时间戳>
 
+## 分析摘要
+
+| 序号 | 维度 |
+|------|------|
+| 1 | 入参静态化 |
+| 2 | Tiling策略 |
+| ... | ... |
+
 ## 瓶颈及可优化点列表
 
 ### 可优化点 1：[优化维度名称]
-**问题描述**：[具体问题说明]
-**代码位置**：[具体行号或代码片段]
-**优化建议**：[具体的优化方案]
+
+| 字段 | 内容 |
+|------|------|
+| **序号** | 1 |
+| **问题描述** | [具体问题说明] |
+| **代码位置** | [文件名:行号] |
+| **预期收益** | [性能提升预估] |
+| **优化建议** | [具体的优化方案] |
 
 ---
 
 ### 可优化点 2：[优化维度名称]
+
+| 字段 | 内容 |
+|------|------|
+| **序号** | 2 |
+| **问题描述** | [具体问题说明] |
+| **代码位置** | [文件名:行号] |
+| **预期收益** | [性能提升预估] |
+| **优化建议** | [具体的优化方案] |
+
+---
 ...
 ```
+
+**字段说明**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| 序号 | 是 | 优化点的唯一标识，从1开始递增，与摘要表格中的序号对应 |
+| 问题描述 | 是 | 清晰描述当前代码存在的问题 |
+| 代码位置 | 是 | 指明问题代码所在位置，格式：`文件名:行号` |
+| 预期收益 | 是 | 预估优化后可获得的性能提升（如：减少20%访存、提升1.5x吞吐等） |
+| 优化建议 | 是 | 具体可执行的优化方案 |
+
+**摘要表格字段说明**：
+
+| 字段 | 说明 |
+|------|------|
+| 序号 | 优化点的编号，从1开始，与详细描述中的序号对应 |
+| 维度 | 分析维度名称 |
+
+**注意**：todo-optim.txt 只保留未完成的优化点。已完成或失败的优化点会被移除。
 
 ## 重要约束
 
 - ⚠️ **必须对所有 12 个维度逐一进行分析，不得遗漏**
-- ⚠️ **每个发现的优化点都必须写入 todo_optim.txt**
+- ⚠️ **每个发现的优化点都必须写入 todo-optim.txt**
 - ⚠️ **优化建议必须具体、可执行**
 - ⚠️ **只能使用本 skill 规定的优化方式进行识别，不要使用任何超出本 skill 之外的优化方式**
+- ⚠️ **优化点必须按优先级从高到低排序，优先级高的优化点排在前面**
+- ⚠️ **todo-optim.txt 只保留未完成的优化点，已完成或失败的优化点必须移除**
 - 如果某个维度没有发现问题，仍需在报告中注明"该维度无明显问题"

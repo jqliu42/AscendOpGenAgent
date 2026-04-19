@@ -289,17 +289,17 @@ optimization_history = []   # 记录每轮优化结果
 │  mkdir -p round_dir                                              │
 │                                                                 │
 │  ── 4.5 执行单点优化 ──────────────────────────────────────      │
-│  调用 kernel-optimizer 子 Agent：                        │
+│  调用 kernel-optimizer 子 Agent：                                │
 │    - input_code_path = best_code                                 │
 │    - optimization_point = 本轮目标优化点                         │
 │    - output_code_path = round_dir/optimized_code.py              │
 │    - verify_dir = round_dir/verify                               │
 │                                                                 │
-│  kernel-optimizer 负责：                                 │
-│    1. 执行单个优化点对代码进行优化                        │
-│    2. 验证优化后代码的精度                                │
-│    3. 测试优化后代码的性能                                │
-│    4. 返回优化结果                                        │
+│  kernel-optimizer 负责：                                         │
+│    1. 执行单个优化点对代码进行优化                                │
+│    2. 验证优化后代码的精度                                        │
+│    3. 测试优化后代码的性能                                        │
+│    4. 返回优化结果                                                │
 │                                                                 │
 │  ── 4.6 结果判定 ─────────────────────────────────────────      │
 │  if optimization_point == "无优化点":                            │
@@ -310,20 +310,21 @@ optimization_history = []   # 记录每轮优化结果
 │    → 更新 best_perf                                              │
 │    → phase4_success = true                                       │
 │    → optimization_history.append({轮次, 优化点, 性能})           │
-│    → 在 todo-optim.txt 中标记该优化点为"完成"                    │
 │    → 记录相比优化前的加速比                                       │
 │                                                                 │
 │  if 验证失败或性能劣化:                                           │
 │    → 记录错误                                                    │
 │    → best_code 保持不变                                          │
-│    → 在 todo-optim.txt 中标记该优化点为"尝试失败"                │
 │    → 记录失败原因或劣化加速比                                     │
 │                                                                 │
 │  ── 4.7 更新 todo-optim.txt ──────────────────────────────      │
 │  opt_round++                                                    │
-│  调用 kernel-analyzer 子 Agent，对最新 best_code 重新分析：      │
-│    - 输入：best_code                                             │
-│    - 输出：todo_optim_path (覆盖更新)                            │
+│  调用 kernel-analyzer 子 Agent：                                 │
+│    - 输入：best_code（最新代码）、optimization_result（本轮结果）│
+│    - kernel-analyzer 根据优化结果更新 todo-optim.txt：           │
+│      · 优化成功 → 移除已完成的优化点                              │
+│      · 优化失败 → 移除尝试失败的优化点                            │
+│      · 重新分析代码，识别新的优化机会                             │
 │                                                                 │
 │  返回 4.2 继续下一轮                                             │
 │                                                                 │
@@ -333,21 +334,42 @@ optimization_history = []   # 记录每轮优化结果
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+⚠️ **重要约束：todo-optim.txt 的管理权限**
+
+- **禁止主 Agent 直接修改 todo-optim.txt**
+- 只有 `kernel-analyzer` 子 Agent 有权创建和更新 todo-optim.txt
+- 主 Agent 只能将优化结果传递给 kernel-analyzer，由其决定如何更新
+- kernel-analyzer 根据优化结果移除已完成或失败的优化点
+
 ### 详细流程
 
 #### 4.1 性能分析
 
 调用 `kernel-analyzer` 子 Agent：
 
+**首次分析（Phase 4 入口）**：
 ```
 输入：
   - npu: NPU设备ID
-  - code_file_path: 当前kernel代码路径（首次为Phase 3的generated_code.py，后续为最新优化结果）
+  - code_file_path: Phase 3 的 generated_code.py
   - todo_optim_path: todo-optim.txt输出路径
   - arch: 硬件架构
 
 输出：
-  - todo_optim.txt文件（包含识别出的所有可优化点）
+  - todo-optim.txt文件（创建，包含识别出的所有可优化点）
+```
+
+**更新分析（4.7 步骤中调用）**：
+```
+输入：
+  - npu: NPU设备ID
+  - code_file_path: 最新优化后的代码
+  - todo_optim_path: todo-optim.txt路径
+  - arch: 硬件架构
+  - optimization_result: 本轮优化结果
+
+输出：
+  - todo-optim.txt文件（更新，移除已处理优化点，添加新识别的优化点）
 ```
 
 #### 4.2 检查优化点
@@ -359,19 +381,45 @@ optimization_history = []   # 记录每轮优化结果
 #### 4.3 解析优化点
 
 从 `todo_optim_path` 解析优化点列表，格式示例：
-```
+```markdown
+# Triton Kernel 性能分析报告
+# 分析文件：<代码文件路径>
+# 分析时间：<时间戳>
+
+## 分析摘要
+
+| 序号 | 维度 |
+|------|------|
+| 1 | 入参静态化 |
+| 2 | Tiling策略 |
+| ... | ... |
+
+## 瓶颈及可优化点列表
+
 ### 可优化点 1：入参静态化
-**问题描述**：xxx
-**优化建议**：xxx
+
+| 字段 | 内容 |
+|------|------|
+| **序号** | 1 |
+| **问题描述** | stride_am 等参数未声明为 tl.constexpr |
+| **代码位置** | generated_code.py:15 |
+| **预期收益** | 减少约10%的kernel启动开销 |
+| **优化建议** | 将 stride_am, stride_an 等固定参数声明为 tl.constexpr |
 
 ---
 
 ### 可优化点 2：Tiling优化
-**问题描述**：xxx
-**优化建议**：xxx
+
+| 字段 | 内容 |
+|------|------|
+| **序号** | 2 |
+| **问题描述** | tl.arange 作用于非连续轴 |
+| **代码位置** | generated_code.py:28 |
+| **预期收益** | 提升约1.5x内存访问效率 |
+| **优化建议** | 调整 tiling 策略，使向量化访存作用于连续轴 |
 ```
 
-取第一个优化点（"可优化点 1"）作为本轮执行目标。
+取摘要表格中第一个优化点作为本轮执行目标。
 
 #### 4.4 创建优化轮次目录
 
@@ -423,33 +471,48 @@ if kernel-optimizer 返回 success == true:
       "performance": <performance数据>,
       "code_path": round_dir/optimized_code.py
     })
-  → 在 todo-optim.txt 中标记该优化点为"完成"
   → 记录加速比：speedup = best_perf.avg_latency_ms / baseline_perf.avg_latency_ms
+  → 准备 optimization_result 传递给 kernel-analyzer
 
 elif kernel-optimizer 返回 verification_passed == false:
   → 验证失败
   → 记录错误到 round_dir/log.md
   → best_code 保持不变
   → best_perf 保持不变
-  → 在 todo-optim.txt 中标记该优化点为"尝试失败"
   → 记录失败原因：kernel-optimizer 返回的 error 信息
+  → 准备 optimization_result 传递给 kernel-analyzer
 
 else:
   → 优化执行失败或性能劣化
   → 记录错误到 round_dir/log.md
   → best_code 保持不变
   → best_perf 保持不变
-  → 在 todo-optim.txt 中标记该优化点为"尝试失败"
   → 若有性能数据，记录劣化加速比；若无，记录失败原因
+  → 准备 optimization_result 传递给 kernel-analyzer
 ```
 
 #### 4.7 更新 todo-optim.txt 并继续
 
 ```
 opt_round++
-调用 kernel-analyzer 子 Agent，对最新 best_code 重新分析：
-  - 输入：best_code（最新优化后的代码）
-  - 输出：todo_optim_path（覆盖更新）
+
+调用 kernel-analyzer 子 Agent：
+输入：
+  - npu: NPU设备ID
+  - code_file_path: best_code（最新优化后的代码）
+  - todo_optim_path: todo-optim.txt路径
+  - arch: 硬件架构
+  - optimization_result: 本轮优化结果
+    {
+      "optimization_point": <优化点序号和名称>,
+      "status": "success"/"failed",
+      "reason": <失败原因，如有>
+    }
+
+kernel-analyzer 职责：
+  1. 根据 optimization_result 移除已完成或失败的优化点
+  2. 重新分析最新代码，识别新的优化机会
+  3. 更新 todo-optim.txt
 
 返回 4.2 继续下一轮
 ```
@@ -635,6 +698,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | ⚠️ **禁止自行执行核心任务** | **代码生成、性能优化、精度验证、性能测试必须通过子 Agent 完成，禁止主 Agent 自行执行。违反此约束将导致任务失败。** |
+| ⚠️ **禁止修改 todo-optim.txt** | **主 Agent 禁止直接修改 todo-optim.txt，只有 kernel-analyzer 子 Agent 有权创建和更新该文件。主 Agent 只能将优化结果传递给 kernel-analyzer。** |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
 | Phase 4 最大轮次 | 10 轮（多轮迭代），禁止超出 |
 | Phase 4 连续失败上限 | 3 次，连续失败达此数则终止优化 |

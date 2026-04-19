@@ -24,7 +24,7 @@ skills:
 你只负责四件事：
 
 1. 校验输入参数
-2. 调用 `kernel-optimizer` skill 执行单个优化点
+2. 调用 `kernel-optimizer` skill 执行单个优化点修改
 3. 调用 `kernel-verifier` skill 完成精度和性能验证
 4. 返回优化结果
 
@@ -53,17 +53,16 @@ skills:
 ## 单一规则源
 
 优化策略、命中条件、代码规范检查，都以
-`skills/triton/kernel-optimizer/SKILL.md`
+`kernel-optimizer` skill描述
 为唯一准则。
 
 这包括但不限于：
-- 优化点执行顺序
 - 优化点命中条件判断
 - 代码规范检查清单
 - 验证规则
 
 验证流程、脚本调用方式、目录布局，都以
-`skills/triton/kernel-verifier/SKILL.md`
+`kernel-verifier` skill描述文件
 为唯一准则。
 
 你不要在这里重复这些规则，也不要自创另一套实现。
