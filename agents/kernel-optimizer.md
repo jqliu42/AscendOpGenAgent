@@ -69,6 +69,25 @@ skills:
 
 ---
 
+## 工作目录结构
+
+```
+verify_dir/
+├── {op_name}_torch.py              # PyTorch 参考实现（从 task_file_path 复制）
+├── {op_name}_triton_baseline.py    # 优化前的 Triton 版本（从 input_code_path 复制）
+└── {op_name}_triton_optimized.py   # 优化后的 Triton 版本（优化后的代码）
+```
+
+**文件说明**：
+
+| 文件 | 来源 | 用途 |
+|------|------|------|
+| `{op_name}_torch.py` | 从 `task_file_path` 复制 | PyTorch 参考实现，用于精度对比基准 |
+| `{op_name}_triton_baseline.py` | 从 `input_code_path` 复制 | 优化前的 Triton 版本，用于性能对比基准 |
+| `{op_name}_triton_optimized.py` | 优化后生成 | 优化后的 Triton 版本，待验证 |
+
+---
+
 ## 执行流程
 
 ### 步骤 1：校验输入
@@ -81,11 +100,28 @@ skills:
 export ASCEND_RT_VISIBLE_DEVICES=${npu}
 ```
 
-### 步骤 3：执行优化
+### 步骤 3：准备验证目录
+
+在 `verify_dir` 下创建三个文件：
+
+1. **复制 PyTorch 参考实现**：
+   - 源文件：`task_file_path`
+   - 目标文件：`{verify_dir}/{op_name}_torch.py`
+
+2. **复制优化前代码**：
+   - 源文件：`input_code_path`
+   - 目标文件：`{verify_dir}/{op_name}_triton_baseline.py`
+
+3. **生成优化后代码**：
+   - 调用 `kernel-optimizer` skill 执行优化
+   - 输出文件：`{verify_dir}/{op_name}_triton_optimized.py`
+   - 同时写入：`output_code_path`
+
+### 步骤 4：执行优化
 
 调用 `kernel-optimizer` skill，传入：
 - `code_file_path` = `input_code_path`
-- `output_path` = `output_code_path`
+- `output_path` = `{verify_dir}/{op_name}_triton_optimized.py`
 - `optimization_point` = 要执行的单个优化点
 - `arch` = `arch`
 
@@ -94,15 +130,122 @@ export ASCEND_RT_VISIBLE_DEVICES=${npu}
 2. 执行 checklist 检查
 3. 返回优化后代码
 
-### 步骤 4：精度验证
+优化完成后，将优化后代码同时写入 `output_code_path`。
 
-调用 `kernel-verifier` skill（mode=verify），验证优化后代码的正确性。
+### 步骤 5：精度验证（两次验证）
 
-### 步骤 5：性能验证
+⚠️ **必须执行两次精度验证**，确保优化前后代码都与 PyTorch 参考实现一致。
 
-调用 `kernel-verifier` skill（mode=benchmark），测试优化后代码的性能。
+#### 5.1 第一次验证：torch vs 优化前（baseline）
 
-### 步骤 6：返回结果
+调用 `kernel-verifier` skill，验证优化前代码的正确性：
+
+```bash
+python3 <kernel-verifier scripts路径>/verify.py \
+    --op_name {op_name} \
+    --verify_dir {verify_dir} \
+    --triton_impl_name triton_baseline \
+    --timeout 900
+```
+
+**验证文件**：
+- 参考实现：`{op_name}_torch.py`
+- 待验证实现：`{op_name}_triton_baseline.py`
+
+**结果判断**：
+- 通过 → 继续 5.2
+- 失败 → 返回错误：`"优化前代码精度验证失败，无法作为基线"`
+
+#### 5.2 第二次验证：torch vs 优化后（optimized）
+
+调用 `kernel-verifier` skill，验证优化后代码的正确性：
+
+```bash
+python3 <kernel-verifier scripts路径>/verify.py \
+    --op_name {op_name} \
+    --verify_dir {verify_dir} \
+    --triton_impl_name triton_optimized \
+    --timeout 900
+```
+
+**验证文件**：
+- 参考实现：`{op_name}_torch.py`
+- 待验证实现：`{op_name}_triton_optimized.py`
+
+**结果判断**：
+- 通过 → 两次精度验证均通过，精度无问题，继续步骤 6
+- 失败 → 返回错误：`"优化后代码精度验证失败"`
+
+### 步骤 6：性能验证（两次测试）
+
+⚠️ **必须执行两次性能测试**，获取优化前后的绝对耗时，计算加速比。
+
+#### 6.1 第一次测试：优化前（baseline）性能
+
+调用 `kernel-verifier` skill，测试优化前代码的性能：
+
+```bash
+python3 <kernel-verifier scripts路径>/benchmark.py \
+    --op_name {op_name} \
+    --verify_dir {verify_dir} \
+    --triton_impl_name triton_baseline \
+    --warmup {warmup} \
+    --repeats {repeats} \
+    --output {verify_dir}/perf_baseline.json
+```
+
+**性能文件**：`{verify_dir}/perf_baseline.json`
+
+**关键指标**：
+- `baseline_latency_ms`：优化前平均延迟（毫秒）
+
+#### 6.2 第二次测试：优化后（optimized）性能
+
+调用 `kernel-verifier` skill，测试优化后代码的性能：
+
+```bash
+python3 <kernel-verifier scripts路径>/benchmark.py \
+    --op_name {op_name} \
+    --verify_dir {verify_dir} \
+    --triton_impl_name triton_optimized \
+    --warmup {warmup} \
+    --repeats {repeats} \
+    --output {verify_dir}/perf_optimized.json
+```
+
+**性能文件**：`{verify_dir}/perf_optimized.json`
+
+**关键指标**：
+- `optimized_latency_ms`：优化后平均延迟（毫秒）
+
+### 步骤 7：计算加速比
+
+从两次性能测试结果中提取数据，计算加速比：
+
+```
+speedup = baseline_latency_ms / optimized_latency_ms
+```
+
+**性能报告格式**：
+
+```json
+{
+  "op_name": "{op_name}",
+  "optimization_point": "{optimization_point}",
+  "baseline": {
+    "avg_latency_ms": <baseline_latency_ms>,
+    "peak_memory_mb": <baseline_memory>
+  },
+  "optimized": {
+    "avg_latency_ms": <optimized_latency_ms>,
+    "peak_memory_mb": <optimized_memory>
+  },
+  "speedup": <speedup>,
+  "improvement_percent": "<(speedup - 1) * 100>%"
+}
+```
+
+### 步骤 8：返回结果
 
 返回简短结果：
 - 成功：优化后代码路径 + 性能数据 + 优化收益
@@ -118,11 +261,14 @@ export ASCEND_RT_VISIBLE_DEVICES=${npu}
   "success": true,
   "output_code_path": "<optimized code path>",
   "performance": {
-    "avg_latency_ms": <value>,
-    "speedup_vs_baseline": <value>
+    "baseline_latency_ms": <value>,
+    "optimized_latency_ms": <value>,
+    "speedup": <value>,
+    "improvement_percent": "<value>%"
   },
   "optimization_point": "<executed optimization point>",
-  "verification_passed": true
+  "verification_passed": true,
+  "verify_dir": "<verify directory path>"
 }
 ```
 
@@ -132,9 +278,22 @@ export ASCEND_RT_VISIBLE_DEVICES=${npu}
   "success": false,
   "error": "<error description>",
   "optimization_point": "<attempted optimization point>",
-  "verification_passed": false
+  "verification_passed": false,
+  "failed_step": "<step name>"
 }
 ```
+
+---
+
+## 验证结果判定规则
+
+| 场景 | 判定 | 处理 |
+|------|------|------|
+| 两次精度验证均通过 | 成功 | 继续性能测试 |
+| 第一次精度验证失败 | 失败 | 返回错误：优化前代码无法作为基线 |
+| 第二次精度验证失败 | 失败 | 返回错误：优化后代码精度不达标 |
+| speedup ≥ 1.0 | 优化有效 | 返回成功结果 |
+| speedup < 1.0 | 性能劣化 | 返回失败，说明性能劣化 |
 
 ---
 
