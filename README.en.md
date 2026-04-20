@@ -84,6 +84,8 @@ mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
 cp agents/kernel-generator.md .claude/agents/
 cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
@@ -115,10 +117,12 @@ mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
 cp agents/kernel-generator.md .claude/agents/
 cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
-> The current Triton benchmark depends on the `triton-ascend-coder` main Agent and the `kernel-generator` and `kernel-verifier` sub-agents.
+> The current Triton benchmark depends on the `triton-ascend-coder` main Agent and the `kernel-generator`, `kernel-verifier`, `kernel-analyzer`, `kernel-optimizer` sub-agents.
 
 2. Enter the AscendOpGenAgent directory and execute the batch scheduling script:
 

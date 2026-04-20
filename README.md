@@ -84,6 +84,8 @@ mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
 cp agents/kernel-generator.md .claude/agents/
 cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
@@ -115,10 +117,12 @@ mkdir -p .claude/skills
 cp agents/triton-ascend-coder.md .claude/CLAUDE.md
 cp agents/kernel-generator.md .claude/agents/
 cp agents/kernel-verifier.md .claude/agents/
+cp agents/kernel-analyzer.md .claude/agents/
+cp agents/kernel-optimizer.md .claude/agents/
 cp -r skills/triton/* .claude/skills/
 ```
 
-> 当前 Triton benchmark 依赖 `triton-ascend-coder` 主 Agent，以及 `kernel-generator`、`kernel-verifier` 两个子 Agent。
+> 当前 Triton benchmark 依赖 `triton-ascend-coder` 主 Agent，以及 `kernel-generator`、`kernel-verifier`、`kernel-analyzer`、`kernel-optimizer` 等子 Agent。
 
 2. 进入 AscendOpGenAgent 目录，执行批量调度脚本：
 
