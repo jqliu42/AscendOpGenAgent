@@ -106,19 +106,18 @@ def run_bishengir_compile(
         "lib",
         "libdevice.10.bc"
     )
-
+    #"--target=Ascend950PR_957c",
+    # "--disable-ffts",
+    # "--enable-vf-fusion",
+    # f"--append-bisheng-options=-cce-link-aicore-ll-module {libdevice_bc}",
+    # "--enable-vf-merge-level=1",
     cmd = [
         bishengir_compile,
-        "--target=Ascend950PR_957c",
         "--enable-auto-multi-buffer=False",
         "--enable-auto-bind-sub-block=True",
-        "--disable-ffts",
-        "--enable-vf-fusion",
         "--enable-hfusion-compile=true",
         "--enable-hivm-compile=true",
         "--enable-triton-kernel-compile=true",
-        f"--append-bisheng-options=-cce-link-aicore-ll-module {libdevice_bc}",
-        "--enable-vf-merge-level=1",
         "--mlir-print-ir-after-all",
         ttadapter_path
     ]
@@ -134,6 +133,8 @@ def run_bishengir_compile(
     )
 
     output = result.stdout + "\n" + result.stderr
+
+    #print(f"=======output = {output}")
 
     matches = list(re.finditer(r"IR Dump After (\S+)", output))
     if not matches:
@@ -206,7 +207,7 @@ def extract_ir(
         print(f"\nProcessing kernel: {kernel_name}")
 
         ir_path = run_bishengir_compile(ttadapter_path, bishengir_compile, output_dir)
-
+        #print(f"==========!!!! ir_path = {ir_path}, ttadapter_path = {ttadapter_path}, bishengir_compile = {bishengir_compile}, output_dir = {output_dir}")
         if ir_path:
             final_path = os.path.join(output_dir, f"{kernel_name}_last_pass.mlir")
             shutil.move(ir_path, final_path)
