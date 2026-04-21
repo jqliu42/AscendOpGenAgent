@@ -264,30 +264,37 @@ todo_optim_path = {工作目录}/output/todo-optim.json
 phase4_success = false
 optimization_history = []   # 记录每轮优化结果
 ```
-
 ### Phase 4 主流程
 
+**核心原则：每一轮优化前后都必须调用 kernel-analyzer，单次调用必须完成"分析代码 + 更新 todo-optim.json"**
+
 ```
+opt_round = 0
+
+── 4.0 首次分析（必须执行）────────────────────────────────
+【强制】调用 kernel-analyzer 子 Agent：
+  - 输入：code_file_path, todo_optim_path, npu, arch
+  - kernel-analyzer 单次调用必须完成：
+    1. 分析 code_file_path 的代码，识别优化点
+    2. 创建 todo-optim.json 并写入所有优化点
+【验证】确认 todo-optim.json 已创建且格式正确
+如果验证失败 → 重新调用 kernel-analyzer（最多 2 次）
+
 while opt_round < max_opt_rounds:
 
-    ── 4.1 性能分析 ─────────────────────────────────────
-    调用 kernel-analyzer 子 Agent，对当前 best_code 进行分析：
-      - 输入：best_code
-      - 输出：todo_optim_path (todo-optim.json)
-
-    ── 4.2 检查优化点 ───────────────────────────────────
+    ── 4.1 检查优化点 ─────────────────────────────────────
     读取 todo_optim_path：
-      - 如果为空 → 跳到 4.8（退出优化阶段，汇报最优）
-      - 如果有内容 → 继续 4.3
+      - 如果 optimization_points 数组为空 → 跳到 4.9（退出优化）
+      - 如果有优化点 → 继续 4.2
 
-    ── 4.3 解析优化点 ───────────────────────────────────
+    ── 4.2 解析优化点 ─────────────────────────────────────
     从 todo_optim_path 读取优化点列表，取第一个作为本轮目标
 
-    ── 4.4 创建优化轮次目录 ──────────────────────────────
+    ── 4.3 创建优化轮次目录 ────────────────────────────────
     round_dir = {工作目录}/output/opt_round_{opt_round}
     mkdir -p round_dir
 
-    ── 4.5 执行单点优化 ─────────────────────────────────
+    ── 4.4 执行单点优化 ────────────────────────────────────
     调用 kernel-optimizer 子 Agent：
       - input_code_path = best_code
       - optimization_point = 本轮目标优化点
@@ -295,14 +302,15 @@ while opt_round < max_opt_rounds:
       - verify_dir = round_dir/verify
 
     kernel-optimizer 负责：
-      1. 执行单个优化点对代码进行优化
-      2. 验证优化后代码的精度
-      3. 测试优化后代码的性能
-      4. 返回优化结果
+      1. 读取 input_code_path 的代码
+      2. 应用 optimization_point 描述的优化
+      3. 生成优化后的代码并写入 output_code_path
+      4. 测试优化后代码的性能
+      5. 返回优化结果
 
-    ── 4.6 结果判定 ─────────────────────────────────────
+    ── 4.5 结果判定 ───────────────────────────────────────
     if optimization_point == "无优化点":
-      → 记录并跳到 4.8
+      → 记录并跳到 4.9
 
     if 验证通过且有性能提升:
       → best_code = round_dir/optimized_code.py 内容
@@ -310,27 +318,44 @@ while opt_round < max_opt_rounds:
       → phase4_success = true
       → optimization_history.append({轮次, 优化点, 性能})
       → 记录相比优化前的加速比
+      → optimization_result = {status: "success", speedup: xxx}
 
     if 验证失败或性能劣化:
       → 记录错误
       → best_code 保持不变
-      → 记录失败原因或劣化加速比
+      → optimization_result = {status: "failed", reason: xxx}
 
-    ── 4.7 更新 todo-optim.json ──────────────────────────
+    ── 4.6 更新 todo-optim.json（必须执行）────────────────
     opt_round++
-    调用 kernel-analyzer 子 Agent：
-      - 输入：best_code（最新代码）、optimization_result（本轮结果）
-      - kernel-analyzer 根据优化结果更新 todo-optim.json：
-        · 优化成功 → 移除已完成的优化点
-        · 优化失败 → 移除尝试失败的优化点
-        · 重新分析代码，识别新的优化机会
+    【强制】调用 kernel-analyzer 子 Agent：
+      - 输入：
+        · code_file_path = best_code（最新优化后的代码）
+        · todo_optim_path = todo-optim.json 路径
+        · npu = NPU设备ID
+        · arch = 硬件架构
+        · optimization_result = 本轮优化结果
+    【重要】kernel-analyzer 单次调用必须完成：
+      1. 根据 optimization_result 移除已完成/失败的优化点
+      2. 重新分析 best_code，识别新的优化机会
+      3. 将结果写入 todo-optim.json（一次性完成）
+    【验证】确认 todo-optim.json 已更新且格式正确
+    如果验证失败 → 重新调用 kernel-analyzer（最多 2 次）
 
-    返回 4.2 继续下一轮
+    返回 4.1 继续下一轮
 
-    ── 4.8 退出优化阶段 ─────────────────────────────────
+    ── 4.9 退出优化阶段 ─────────────────────────────────────
     从 optimization_history 中选择最优结果作为最终结果
     进入 Phase 5
 ```
+
+⚠️ **强制调用规则**
+
+- **每一轮优化前后都必须调用 kernel-analyzer**
+  - 4.0：单次调用 = 分析 + 创建 todo-optim.json
+  - 4.6：单次调用 = 分析 + 更新 todo-optim.json
+- **禁止跳过 kernel-analyzer 调用**
+- **单次调用内不能拆分分析和写入操作** - 必须一次性完成
+- **验证机制**：每次调用后必须验证 todo-optim.json 被正确创建/更新
 
 ⚠️ **重要约束：todo-optim.json 的管理权限**
 
@@ -341,11 +366,23 @@ while opt_round < max_opt_rounds:
 
 ### 详细流程
 
-#### 4.1 性能分析
+详细流程与上方主流程一致，步骤编号对应关系如下：
+
+| 主流程步骤 | 详细流程步骤 | 说明 |
+|-----------|-------------|------|
+| 4.0 | 4.1 | 首次分析 |
+| 4.1 | 4.2 | 检查优化点 |
+| 4.2 | 4.3 | 解析优化点 |
+| 4.3 | 4.4 | 创建优化轮次目录 |
+| 4.4 | 4.5 | 执行单点优化 |
+| 4.5 | 4.6 | 结果判定 |
+| 4.6 | 4.7 | 更新 todo-optim.json |
+| 4.9 | 4.8 | 退出优化阶段 |
+
+#### 4.1 首次分析（对应 4.0）
 
 调用 `kernel-analyzer` 子 Agent：
 
-**首次分析（Phase 4 入口）**：
 ```
 输入：
   - npu: NPU设备ID
@@ -357,32 +394,13 @@ while opt_round < max_opt_rounds:
   - todo-optim.json文件（创建，包含识别出的所有可优化点）
 ```
 
-**更新分析（4.7 步骤中调用）**：
-```
-输入：
-  - npu: NPU设备ID
-  - code_file_path: 最新优化后的代码
-  - todo_optim_path: todo-optim.json路径
-  - arch: 硬件架构
-  - optimization_result: 本轮优化结果
-    {
-      "optimization_point": <优化点序号和名称>,
-      "status": "success" | "failed",
-      "speedup": <加速比，仅 success 时>,
-      "reason": <失败原因，仅 failed 时>
-    }
-
-输出：
-  - todo-optim.json文件（更新，移除已处理优化点，添加新识别的优化点）
-```
-
-#### 4.2 检查优化点
+#### 4.2 检查优化点（对应 4.1）
 
 读取 `todo_optim_path` 文件内容：
-- 如果 `optimization_points` 数组为空 → 优化完成，跳到 4.8
+- 如果 `optimization_points` 数组为空 → 跳到 4.9（退出优化）
 - 如果有优化点 → 继续 4.3
 
-#### 4.3 解析优化点
+#### 4.3 解析优化点（对应 4.2）
 
 从 `todo_optim_path` 解析优化点列表，格式示例：
 ```json
@@ -406,7 +424,7 @@ while opt_round < max_opt_rounds:
 
 取数组中第一个优化点作为本轮执行目标。
 
-#### 4.4 创建优化轮次目录
+#### 4.4 创建优化轮次目录（对应 4.3）
 
 ```bash
 round_dir={工作目录}/output/opt_round_{opt_round}
@@ -414,7 +432,7 @@ mkdir -p {round_dir}
 mkdir -p {round_dir}/verify
 ```
 
-#### 4.5 执行单点优化
+#### 4.5 执行单点优化（对应 4.4）
 
 调用 `kernel-optimizer` 子 Agent：
 
@@ -445,7 +463,7 @@ kernel-optimizer 返回：
 }
 ```
 
-#### 4.6 结果判定
+#### 4.6 结果判定（对应 4.5）
 
 ```
 if kernel-optimizer 返回 success == true:
@@ -459,6 +477,40 @@ if kernel-optimizer 返回 success == true:
       "performance": <performance数据>,
       "code_path": round_dir/optimized_code.py
     })
+```
+
+#### 4.7 更新 todo-optim.json（对应 4.6）
+
+调用 `kernel-analyzer` 子 Agent：
+```
+输入：
+  - npu: NPU设备ID
+  - code_file_path: 最新优化后的代码
+  - todo_optim_path: todo-optim.json路径
+  - arch: 硬件架构
+  - optimization_result: 本轮优化结果
+    {
+      "optimization_point": "<id>: <dimension>",
+      "status": "success" | "failed",
+      "speedup": <加速比，仅 success 时>,
+      "reason": <失败原因，仅 failed 时>
+    }
+
+kernel-analyzer 必须完成以下操作：
+  1. 根据 optimization_result 移除已完成或失败的优化点
+  2. 重新分析代码，识别新的优化机会
+  3. 将更新后的 optimization_points 写入 todo-optim.json
+
+输出：
+  - todo-optim.json文件（更新，移除已处理优化点，添加新识别的优化点）
+```
+
+#### 4.8 退出优化阶段（对应 4.9）
+
+满足以下任一条件即退出优化阶段：
+1. `todo-optim.json` 为空（无更多优化点）
+2. 达到 max_opt_rounds（默认 10 轮）
+3. 连续失败达到 3 次
   → 记录加速比：speedup = best_perf.speedup
   → 准备 optimization_result 传递给 kernel-analyzer：
     {
