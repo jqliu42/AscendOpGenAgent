@@ -268,70 +268,68 @@ optimization_history = []   # 记录每轮优化结果
 ### Phase 4 主流程
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Phase 4 性能优化多轮迭代                       │
-│                                                                 │
-│  ── 4.1 性能分析 ─────────────────────────────────────────      │
-│  调用 kernel-analyzer 子 Agent，对当前 best_code 进行分析：       │
-│    - 输入：best_code                                             │
-│    - 输出：todo_optim_path (todo-optim.txt)                      │
-│                                                                 │
-│  ── 4.2 检查优化点 ───────────────────────────────────────      │
-│  读取 todo_optim_path：                                          │
-│    - 如果为空 → 跳到 4.8（退出优化阶段，汇报最优）                │
-│    - 如果有内容 → 继续 4.3                                        │
-│                                                                 │
-│  ── 4.3 解析优化点 ───────────────────────────────────────      │
-│  从 todo_optim_path 读取优化点列表，取第一个作为本轮目标          │
-│                                                                 │
-│  ── 4.4 创建优化轮次目录 ──────────────────────────────────      │
-│  round_dir = {工作目录}/output/opt_round_{opt_round}             │
-│  mkdir -p round_dir                                              │
-│                                                                 │
-│  ── 4.5 执行单点优化 ──────────────────────────────────────      │
-│  调用 kernel-optimizer 子 Agent：                                │
-│    - input_code_path = best_code                                 │
-│    - optimization_point = 本轮目标优化点                         │
-│    - output_code_path = round_dir/optimized_code.py              │
-│    - verify_dir = round_dir/verify                               │
-│                                                                 │
-│  kernel-optimizer 负责：                                         │
-│    1. 执行单个优化点对代码进行优化                                │
-│    2. 验证优化后代码的精度                                        │
-│    3. 测试优化后代码的性能                                        │
-│    4. 返回优化结果                                                │
-│                                                                 │
-│  ── 4.6 结果判定 ─────────────────────────────────────────      │
-│  if optimization_point == "无优化点":                            │
-│    → 记录并跳到 4.8                                              │
-│                                                                 │
-│  if 验证通过且有性能提升:                                         │
-│    → best_code = round_dir/optimized_code.py 内容               │
-│    → 更新 best_perf                                              │
-│    → phase4_success = true                                       │
-│    → optimization_history.append({轮次, 优化点, 性能})           │
-│    → 记录相比优化前的加速比                                       │
-│                                                                 │
-│  if 验证失败或性能劣化:                                           │
-│    → 记录错误                                                    │
-│    → best_code 保持不变                                          │
-│    → 记录失败原因或劣化加速比                                     │
-│                                                                 │
-│  ── 4.7 更新 todo-optim.txt ──────────────────────────────      │
-│  opt_round++                                                    │
-│  调用 kernel-analyzer 子 Agent：                                 │
-│    - 输入：best_code（最新代码）、optimization_result（本轮结果）│
-│    - kernel-analyzer 根据优化结果更新 todo-optim.txt：           │
-│      · 优化成功 → 移除已完成的优化点                              │
-│      · 优化失败 → 移除尝试失败的优化点                            │
-│      · 重新分析代码，识别新的优化机会                             │
-│                                                                 │
-│  返回 4.2 继续下一轮                                             │
-│                                                                 │
-│  ── 4.8 退出优化阶段 ──────────────────────────────────────      │
-│  从 optimization_history 中选择最优结果作为最终结果              │
-│  进入 Phase 5                                                    │
-└─────────────────────────────────────────────────────────────────┘
+while opt_round < max_opt_rounds:
+
+    ── 4.1 性能分析 ─────────────────────────────────────
+    调用 kernel-analyzer 子 Agent，对当前 best_code 进行分析：
+      - 输入：best_code
+      - 输出：todo_optim_path (todo-optim.txt)
+
+    ── 4.2 检查优化点 ───────────────────────────────────
+    读取 todo_optim_path：
+      - 如果为空 → 跳到 4.8（退出优化阶段，汇报最优）
+      - 如果有内容 → 继续 4.3
+
+    ── 4.3 解析优化点 ───────────────────────────────────
+    从 todo_optim_path 读取优化点列表，取第一个作为本轮目标
+
+    ── 4.4 创建优化轮次目录 ──────────────────────────────
+    round_dir = {工作目录}/output/opt_round_{opt_round}
+    mkdir -p round_dir
+
+    ── 4.5 执行单点优化 ─────────────────────────────────
+    调用 kernel-optimizer 子 Agent：
+      - input_code_path = best_code
+      - optimization_point = 本轮目标优化点
+      - output_code_path = round_dir/optimized_code.py
+      - verify_dir = round_dir/verify
+
+    kernel-optimizer 负责：
+      1. 执行单个优化点对代码进行优化
+      2. 验证优化后代码的精度
+      3. 测试优化后代码的性能
+      4. 返回优化结果
+
+    ── 4.6 结果判定 ─────────────────────────────────────
+    if optimization_point == "无优化点":
+      → 记录并跳到 4.8
+
+    if 验证通过且有性能提升:
+      → best_code = round_dir/optimized_code.py 内容
+      → 更新 best_perf
+      → phase4_success = true
+      → optimization_history.append({轮次, 优化点, 性能})
+      → 记录相比优化前的加速比
+
+    if 验证失败或性能劣化:
+      → 记录错误
+      → best_code 保持不变
+      → 记录失败原因或劣化加速比
+
+    ── 4.7 更新 todo-optim.txt ──────────────────────────
+    opt_round++
+    调用 kernel-analyzer 子 Agent：
+      - 输入：best_code（最新代码）、optimization_result（本轮结果）
+      - kernel-analyzer 根据优化结果更新 todo-optim.txt：
+        · 优化成功 → 移除已完成的优化点
+        · 优化失败 → 移除尝试失败的优化点
+        · 重新分析代码，识别新的优化机会
+
+    返回 4.2 继续下一轮
+
+    ── 4.8 退出优化阶段 ─────────────────────────────────
+    从 optimization_history 中选择最优结果作为最终结果
+    进入 Phase 5
 ```
 
 ⚠️ **重要约束：todo-optim.txt 的管理权限**
@@ -478,7 +476,7 @@ if kernel-optimizer 返回 success == true:
       "performance": <performance数据>,
       "code_path": round_dir/optimized_code.py
     })
-  → 记录加速比：speedup = best_perf.avg_latency_ms / baseline_perf.avg_latency_ms
+  → 记录加速比：speedup = best_perf.speedup
   → 准备 optimization_result 传递给 kernel-analyzer：
     {
       "optimization_point": <优化点序号和名称>,
@@ -546,7 +544,7 @@ kernel-analyzer 职责：
 
 ```
 if optimization_history 不为空:
-  找到 optimization_history 中 best_perf.avg_latency_ms 最小的记录
+  找到 optimization_history 中 performance.optimized_latency_ms 最小的记录
   → best_code = 该记录的 code_path 内容
   → best_perf = 该记录的 performance
 
