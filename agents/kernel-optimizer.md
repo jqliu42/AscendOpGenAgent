@@ -39,7 +39,7 @@ skills:
 - `op_name`：算子名称
 - `task_file_path`：任务描述文件路径
 - `input_code_path`：待优化的 kernel 代码路径
-- `optimization_point`：要执行的单个优化点（从 todo_optim.txt 中选择一个）
+- `optimization_point`：要执行的单个优化点（从 todo-optim.json 中选择一个）
 - `output_code_path`：优化后代码输出路径
 - `verify_dir`：验证目录
 - `arch`：硬件架构

@@ -260,7 +260,7 @@ best_code = Phase 3 产出的 generated_code.py
 best_perf = Phase 3 产出的 perf_result.json
 baseline_code = Phase 3 产出的 generated_code.py
 baseline_perf = Phase 3 产出的 perf_result.json
-todo_optim_path = {工作目录}/output/todo-optim.txt
+todo_optim_path = {工作目录}/output/todo-optim.json
 phase4_success = false
 optimization_history = []   # 记录每轮优化结果
 ```
@@ -273,7 +273,7 @@ while opt_round < max_opt_rounds:
     ── 4.1 性能分析 ─────────────────────────────────────
     调用 kernel-analyzer 子 Agent，对当前 best_code 进行分析：
       - 输入：best_code
-      - 输出：todo_optim_path (todo-optim.txt)
+      - 输出：todo_optim_path (todo-optim.json)
 
     ── 4.2 检查优化点 ───────────────────────────────────
     读取 todo_optim_path：
@@ -316,11 +316,11 @@ while opt_round < max_opt_rounds:
       → best_code 保持不变
       → 记录失败原因或劣化加速比
 
-    ── 4.7 更新 todo-optim.txt ──────────────────────────
+    ── 4.7 更新 todo-optim.json ──────────────────────────
     opt_round++
     调用 kernel-analyzer 子 Agent：
       - 输入：best_code（最新代码）、optimization_result（本轮结果）
-      - kernel-analyzer 根据优化结果更新 todo-optim.txt：
+      - kernel-analyzer 根据优化结果更新 todo-optim.json：
         · 优化成功 → 移除已完成的优化点
         · 优化失败 → 移除尝试失败的优化点
         · 重新分析代码，识别新的优化机会
@@ -332,10 +332,10 @@ while opt_round < max_opt_rounds:
     进入 Phase 5
 ```
 
-⚠️ **重要约束：todo-optim.txt 的管理权限**
+⚠️ **重要约束：todo-optim.json 的管理权限**
 
-- **禁止主 Agent 直接修改 todo-optim.txt**
-- 只有 `kernel-analyzer` 子 Agent 有权创建和更新 todo-optim.txt
+- **禁止主 Agent 直接修改 todo-optim.json**
+- 只有 `kernel-analyzer` 子 Agent 有权创建和更新 todo-optim.json
 - 主 Agent 只能将优化结果传递给 kernel-analyzer，由其决定如何更新
 - kernel-analyzer 根据优化结果移除已完成或失败的优化点
 
@@ -350,11 +350,11 @@ while opt_round < max_opt_rounds:
 输入：
   - npu: NPU设备ID
   - code_file_path: Phase 3 的 generated_code.py
-  - todo_optim_path: todo-optim.txt输出路径
+  - todo_optim_path: todo-optim.json输出路径
   - arch: 硬件架构
 
 输出：
-  - todo-optim.txt文件（创建，包含识别出的所有可优化点）
+  - todo-optim.json文件（创建，包含识别出的所有可优化点）
 ```
 
 **更新分析（4.7 步骤中调用）**：
@@ -362,7 +362,7 @@ while opt_round < max_opt_rounds:
 输入：
   - npu: NPU设备ID
   - code_file_path: 最新优化后的代码
-  - todo_optim_path: todo-optim.txt路径
+  - todo_optim_path: todo-optim.json路径
   - arch: 硬件架构
   - optimization_result: 本轮优化结果
     {
@@ -373,55 +373,38 @@ while opt_round < max_opt_rounds:
     }
 
 输出：
-  - todo-optim.txt文件（更新，移除已处理优化点，添加新识别的优化点）
+  - todo-optim.json文件（更新，移除已处理优化点，添加新识别的优化点）
 ```
 
 #### 4.2 检查优化点
 
 读取 `todo_optim_path` 文件内容：
-- 如果文件为空或只包含注释/空行 → 优化完成，跳到 4.8
+- 如果 `optimization_points` 数组为空 → 优化完成，跳到 4.8
 - 如果有优化点 → 继续 4.3
 
 #### 4.3 解析优化点
 
 从 `todo_optim_path` 解析优化点列表，格式示例：
-```markdown
-# Triton Kernel 性能分析报告
-# 分析文件：<代码文件路径>
-# 分析时间：<时间戳>
-
-## 分析摘要
-
-| 序号 | 维度 |
-|------|------|
-| 1 | 入参静态化 |
-| 2 | Tiling策略 |
-| ... | ... |
-
-## 瓶颈及可优化点列表
-
-### 可优化点 1：入参静态化
-
-| 字段 | 内容 |
-|------|------|
-| **序号** | 1 |
-| **问题描述** | stride_am 等参数未声明为 tl.constexpr |
-| **代码位置** | generated_code.py:15 |
-| **优化建议** | 将 stride_am, stride_an 等固定参数声明为 tl.constexpr |
-
----
-
-### 可优化点 2：Tiling优化
-
-| 字段 | 内容 |
-|------|------|
-| **序号** | 2 |
-| **问题描述** | tl.arange 作用于非连续轴 |
-| **代码位置** | generated_code.py:28 |
-| **优化建议** | 调整 tiling 策略，使向量化访存作用于连续轴 |
+```json
+{
+  "optimization_points": [
+    {
+      "id": 1,
+      "dimension": "入参静态化",
+      "description": "stride_am 等参数未声明为 tl.constexpr",
+      "suggestion": "将 stride_am, stride_an 等固定参数声明为 tl.constexpr"
+    },
+    {
+      "id": 2,
+      "dimension": "Tiling策略",
+      "description": "tl.arange 作用于非连续轴",
+      "suggestion": "调整 tiling 策略，使向量化访存作用于连续轴"
+    }
+  ]
+}
 ```
 
-取摘要表格中第一个优化点作为本轮执行目标。
+取数组中第一个优化点作为本轮执行目标。
 
 #### 4.4 创建优化轮次目录
 
@@ -441,7 +424,7 @@ mkdir -p {round_dir}/verify
   - op_name: 算子名称
   - task_file_path: 任务描述文件路径
   - input_code_path: 当前best_code路径
-  - optimization_point: 本轮目标优化点（从todo-optim.txt解析）
+  - optimization_point: 本轮目标优化点（从todo-optim.json解析）
   - output_code_path: round_dir/optimized_code.py
   - verify_dir: round_dir/verify
   - arch: 硬件架构
@@ -511,7 +494,7 @@ else:
     }
 ```
 
-#### 4.7 更新 todo-optim.txt 并继续
+#### 4.7 更新 todo-optim.json 并继续
 
 ```
 opt_round++
@@ -520,7 +503,7 @@ opt_round++
 输入：
   - npu: NPU设备ID
   - code_file_path: best_code（最新优化后的代码）
-  - todo_optim_path: todo-optim.txt路径
+  - todo_optim_path: todo-optim.json路径
   - arch: 硬件架构
   - optimization_result: 本轮优化结果
     {
@@ -533,7 +516,7 @@ opt_round++
 kernel-analyzer 职责：
   1. 根据 optimization_result 移除已完成或失败的优化点
   2. 重新分析最新代码，识别新的优化机会
-  3. 更新 todo-optim.txt
+  3. 更新 todo-optim.json
 
 返回 4.2 继续下一轮
 ```
@@ -561,7 +544,7 @@ else:
 {工作目录}/output/
 ├── generated_code.py                 # Phase 3 最终代码
 ├── perf_result.json                  # Phase 3 性能数据
-├── todo-optim.txt                    # 当前优化点清单（动态更新）
+├── todo-optim.json                    # 当前优化点清单（动态更新）
 ├── opt_round_0/                      # 第0轮优化
 │   ├── optimized_code.py             # 优化后代码
 │   ├── verify/
@@ -580,7 +563,7 @@ else:
 ### Phase 4 完成条件
 
 满足以下任一条件即退出优化阶段：
-1. `todo-optim.txt` 为空（无更多优化点）
+1. `todo-optim.json` 为空（无更多优化点）
 2. 达到 `max_opt_rounds`（默认 10 轮）
 3. 优化点执行失败连续 3 次
 
@@ -668,7 +651,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 ├── output/
 │   ├── generated_code.py                 # 最终最优代码（Phase 3 或 Phase 4 最优版本）
 │   ├── perf_result.json                  # 最终性能报告
-│   ├── todo-optim.txt                    # 优化点清单（动态更新）
+│   ├── todo-optim.json                    # 优化点清单（动态更新）
 │   ├── iter_0/                           # Phase 3 第 0 轮迭代
 │   │   ├── generated_code.py
 │   │   ├── verify/
@@ -709,7 +692,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | Phase 3 | B 类环境错误 | 立即终止，任务失败 |
 | Phase 3 | C 类重复错误 | 立即终止，任务失败 |
 | Phase 4 | 达到 max_opt_rounds | 选择最优结果，进入 Phase 5 |
-| Phase 4 | todo-optim.txt 为空 | 优化完成，选择最优结果，进入 Phase 5 |
+| Phase 4 | todo-optim.json 为空 | 优化完成，选择最优结果，进入 Phase 5 |
 | Phase 4 | 优化点执行失败连续 3 次 | 终止优化，选择最优结果，进入 Phase 5 |
 
 ---
@@ -719,7 +702,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | 约束 | 说明 |
 |------|------|
 | ⚠️ **禁止自行执行核心任务** | **代码生成、性能优化、精度验证、性能测试必须通过子 Agent 完成，禁止主 Agent 自行执行。违反此约束将导致任务失败。** |
-| ⚠️ **禁止修改 todo-optim.txt** | **主 Agent 禁止直接修改 todo-optim.txt，只有 kernel-analyzer 子 Agent 有权创建和更新该文件。主 Agent 只能将优化结果传递给 kernel-analyzer。** |
+| ⚠️ **禁止修改 todo-optim.json** | **主 Agent 禁止直接修改 todo-optim.json，只有 kernel-analyzer 子 Agent 有权创建和更新该文件。主 Agent 只能将优化结果传递给 kernel-analyzer。** |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
 | Phase 4 最大轮次 | 10 轮（多轮迭代），禁止超出 |
 | Phase 4 连续失败上限 | 3 次，连续失败达此数则终止优化 |
