@@ -51,12 +51,9 @@ argument-hint: >
 
 ```
 1. 加载待分析的 Triton Kernel 代码文件
-2. 【IR 提取】运行 IR 提取脚本，编译 Triton Kernel 并提取编译器 IR
-3. 【IR 分析】分析提取的 IR 文件，识别 IR 层面的优化机会
-4. 【代码分析】按照分析维度逐一检查代码，识别所有可优化点
-5. 按优先级从高到低排序优化点
-6. 创建 todo-optim.txt 并写入所有优化点
-7. 【清理】删除 IR 输出目录（ir_output/）
+2. 【代码分析】按照分析维度逐一检查代码，识别所有可优化点
+3. 按优先级从高到低排序优化点
+4. 创建 todo-optim.txt 并写入所有优化点
 ```
 
 ### 更新分析（有 optimization_result）
@@ -67,71 +64,9 @@ argument-hint: >
    - status == "success" → 移除该优化点（已完成）
    - status == "failed" → 移除该优化点（尝试失败，不再重试）
 3. 加载最新的代码文件
-4. 【IR 提取】重新运行 IR 提取脚本
-5. 【IR 分析】重新分析 IR 文件
-6. 【代码分析】重新分析代码，识别新的优化机会
-7. 按优先级从高到低排序剩余和新识别的优化点
-8. 更新 todo-optim.txt
-9. 【清理】删除 IR 输出目录（ir_output/）
-```
-
-## IR 提取与分析
-
-### IR 提取步骤
-
-使用 skill 目录下的 `scripts/extract_ir.py` 脚本提取 Triton 编译器 IR：
-
-```bash
-python <skill_dir>/scripts/extract_ir.py <code_file_path> --output-dir ./ir_output
-```
-
-该脚本会：
-1. 设置 `TRITON_DEBUG=1` 和 `TRITON_ALWAYS_COMPILE=1` 触发编译
-2. 运行 Triton 脚本，生成 dump 目录
-3. 使用 `bishengir-compile --mlir-print-ir-after-all` 提取最后一个 pass 的 IR
-4. 将 IR 文件保存到 `./ir_output/<kernel_name>_last_pass.mlir`
-
-### IR 分析要点
-
-分析提取的 IR 文件时，关注以下内容：
-
-#### 1. 内存访问模式
-- 检查 `hivm.intr.hivm.LOAD` / `hivm.intr.hivm.STORE` 指令
-- 分析是否使用了向量化加载（`hivm.intr.hivm.LOAD.GM_TO_UB`）
-- 检查是否存在离散访存模式
-
-#### 2. 计算流水线
-- 检查 Cube 指令（`hivm.intr.hivm.MAD` 等）用于矩阵运算
-- 检查 Vector 指令（`hivm.intr.hivm.VADD` 等）用于元素级运算
-- 分析 AIC（Cube）和 AIV（Vector）流水线的利用率
-
-#### 3. 同步与屏障
-- 检查 `hivm.intr.hivm.BARRIER` 指令数量
-- 过多的同步可能影响并行度
-
-#### 4. 循环展开与向量化
-- 检查 IR 中的循环结构是否被正确展开
-- 分析向量运算的宽度
-
-#### 5. 内存层级使用
-- 检查 L0A/L0B/L0C（Cube 专用内存）的使用
-- 检查 UB（Unified Buffer，Vector 专用内存）的使用
-- 分析 GM（Global Memory）与片上内存之间的数据传输
-
-### IR 分析输出
-
-IR 分析结果应作为优化点的一部分写入 todo-optim.txt，格式如下：
-
-```markdown
-### 可优化点 N：[IR 层面问题]
-
-| 字段 | 内容 |
-|------|------|
-| **序号** | N |
-| **问题描述** | [IR 中的具体问题，如：发现大量 BARRIER 指令] |
-| **代码位置** | IR: <kernel_name>_last_pass.mlir |
-| **预期收益** | [性能提升预估] |
-| **优化建议** | [基于 IR 分析的具体优化方案] |
+4. 【代码分析】重新分析代码，识别新的优化机会
+5. 按优先级从高到低排序剩余和新识别的优化点
+6. 更新 todo-optim.txt
 ```
 
 ## 分析维度
@@ -409,38 +344,6 @@ def kernel(A, C, M, N, BLOCK_SIZE: tl.constexpr):
 
 ---
 
-### 维度 13：IR 层面分析
-
-**检查内容**：分析编译器生成的 IR，识别底层优化机会
-
-**分析要点**：
-
-1. **内存访问指令分析**
-   - 检查 `hivm.intr.hivm.LOAD` / `STORE` 指令类型
-   - 识别是否使用了高效的向量化加载（如 `LOAD.GM_TO_UB`）
-   - 分析访存模式是否连续
-
-2. **同步指令分析**
-   - 统计 `hivm.intr.hivm.BARRIER` 指令数量
-   - 过多的同步会降低并行度
-
-3. **计算指令分析**
-   - Cube 指令（`MAD` 等）：用于矩阵乘法
-   - Vector 指令（`VADD`、`VMUL` 等）：用于元素级运算
-   - 分析流水线利用率
-
-4. **循环结构分析**
-   - 检查循环是否被正确展开
-   - 分析向量化宽度
-
-**判断逻辑**：
-- 如果 IR 中存在大量 BARRIER 指令 → 标记为可优化点，考虑减少同步
-- 如果 IR 中存在标量化的访存指令 → 标记为可优化点，考虑向量化
-- 如果 IR 中 Cube/Vector 流水线利用率低 → 标记为可优化点
-- 如果 IR 中循环未正确展开 → 标记为可优化点
-
----
-
 ## 输出格式
 
 **输出文件**：`todo_optim.txt`
@@ -467,7 +370,7 @@ def kernel(A, C, M, N, BLOCK_SIZE: tl.constexpr):
 |------|------|
 | **序号** | 1 |
 | **问题描述** | [具体问题说明] |
-| **代码位置** | [文件名:行号] 或 IR: <kernel_name>_last_pass.mlir |
+| **代码位置** | [文件名:行号] |
 | **预期收益** | [性能提升预估] |
 | **优化建议** | [具体的优化方案] |
 
@@ -479,7 +382,7 @@ def kernel(A, C, M, N, BLOCK_SIZE: tl.constexpr):
 |------|------|
 | **序号** | 2 |
 | **问题描述** | [具体问题说明] |
-| **代码位置** | [文件名:行号] 或 IR: <kernel_name>_last_pass.mlir |
+| **代码位置** | [文件名:行号] |
 | **预期收益** | [性能提升预估] |
 | **优化建议** | [具体的优化方案] |
 
@@ -508,11 +411,10 @@ def kernel(A, C, M, N, BLOCK_SIZE: tl.constexpr):
 
 ## 重要约束
 
-- ⚠️ **必须对所有 13 个维度逐一进行分析，不得遗漏**
+- ⚠️ **必须对所有 12 个维度逐一进行分析，不得遗漏**
 - ⚠️ **每个发现的优化点都必须写入 todo-optim.txt**
 - ⚠️ **优化建议必须具体、可执行**
 - ⚠️ **只能使用本 skill 规定的优化方式进行识别，不要使用任何超出本 skill 之外的优化方式**
 - ⚠️ **优化点必须按优先级从高到低排序，优先级高的优化点排在前面**
 - ⚠️ **todo-optim.txt 只保留未完成的优化点，已完成或失败的优化点必须移除**
-- ⚠️ **IR 分析完成后，必须删除 IR 输出目录（ir_output/）**
 - 如果某个维度没有发现问题，仍需在报告中注明"该维度无明显问题"
