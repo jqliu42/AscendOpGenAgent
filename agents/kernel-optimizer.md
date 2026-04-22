@@ -4,11 +4,11 @@ description: Triton-Ascend 性能优化执行子 Agent，负责执行单个优�
 temperature: 0.1
 
 tools:
-  write: true
-  edit: true
-  read: true
-  bash: true
-  skill: true
+  - write
+  - edit
+  - read
+  - bash
+  - skill
 
 skills:
   - kernel-optimizer
