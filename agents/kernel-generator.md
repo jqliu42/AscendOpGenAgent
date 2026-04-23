@@ -4,11 +4,11 @@ description: Triton-Ascend 代码生成子 Agent，负责根据任务描述和�
 temperature: 0.1
 
 tools:
-  - write
-  - edit
-  - read
-  - bash
-  - skill
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
 
 skills:
   - kernel-generator

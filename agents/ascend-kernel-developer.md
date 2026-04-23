@@ -4,11 +4,11 @@ description: Ascend kernel 开发专家 Agent，通过 TileLang 和 AscendC 完�
 temperature: 0.1
 
 tools:
-  - write
-  - edit
-  - bash
-  - skill
-  - read
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
 
 skills:
   - case-simplifier

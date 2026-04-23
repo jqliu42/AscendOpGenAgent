@@ -4,12 +4,12 @@ description: Triton-Ascend 算子代码生成与优化 Agent
 temperature: 0.1
 
 tools:
-  - write
-  - edit
-  - bash
-  - skill
-  - agent
-  - read
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
+  - Agent
 
 skills:
   - op-task-extractor

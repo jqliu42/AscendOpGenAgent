@@ -4,11 +4,11 @@ description: Triton-Ascend 性能分析子 Agent，负责分析 kernel 性能瓶
 temperature: 0.1
 
 tools:
-  - write
-  - edit
-  - read
-  - bash
-  - skill
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
 
 skills:
   - kernel-analyzer

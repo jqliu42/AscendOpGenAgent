@@ -4,11 +4,11 @@ description: Triton-Ascend 验证子 Agent，负责验证 kernel 代码的正确
 temperature: 0.1
 
 tools:
-  - write
-  - edit
-  - read
-  - bash
-  - skill
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Skill
 
 skills:
   - kernel-verifier
