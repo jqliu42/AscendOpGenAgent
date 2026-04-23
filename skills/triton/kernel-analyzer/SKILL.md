@@ -4,7 +4,7 @@ description: >
   Analyzes Triton kernel performance bottlenecks and identifies optimization opportunities.
   Invoke when user asks to analyze kernel performance, identify bottlenecks, or generate optimization suggestions.
 argument-hint: >
-  输入：code-file-path（代码文件路径）、todo-optim-path（输出路径）、arch（硬件架构）、optimization-result（可选，本轮优化结果）。
+  输入：code-file-path（代码文件路径）、todo-optim-path（输出路径）、arch（硬件架构）、optim-history-path（优化历史文件路径）、optimization-result（可选，本轮优化结果）。
   输出：todo_optim.txt（包含识别出的瓶颈和可优化点列表）。
 ---
 
@@ -23,6 +23,7 @@ argument-hint: >
 | code_file_path | 是 | 待分析的 Triton Kernel 代码文件路径 |
 | todo_optim_path | 是 | todo-optim.json 输出路径 |
 | arch | 是 | 硬件架构 |
+| optim_history_path | 是 | 优化历史文件路径（optim_history.json） |
 | optimization_result | 否 | 本轮优化结果，用于更新 todo-optim.json |
 
 ### optimization_result 格式
@@ -50,10 +51,14 @@ argument-hint: >
 ### 首次分析（无 optimization_result）
 
 ```
-1. 加载待分析的 Triton Kernel 代码文件
-2. 【代码分析】按照分析维度逐一检查代码，识别所有可优化点
-3. 按优先级从高到低排序优化点
-4. 创建 todo-optim.json 并写入所有优化点
+1. 加载 optim_history.json，读取历史优化记录
+2. 加载待分析的 Triton Kernel 代码文件
+3. 【代码分析】按照分析维度逐一检查代码，识别所有可优化点
+4. 结合历史经验评估每个优化点的潜力：
+   - 历史上同类优化 speedup 高 → 该类型优化潜力大，优先推荐
+   - 历史上同类优化 speedup 低或失败 → 该类型优化潜力小，降低优先级
+5. 按优化潜力从大到小排序优化点
+6. 创建 todo-optim.json 并写入所有优化点
 ```
 
 ### 更新分析（有 optimization_result）
@@ -63,11 +68,43 @@ argument-hint: >
 2. 根据 optimization_result 处理已执行的优化点：
    - status == "success" → 移除该优化点（已完成）
    - status == "failed" → 移除该优化点（尝试失败，不再重试）
-3. 加载最新的代码文件
-4. 【代码分析】重新分析代码，识别新的优化机会
-5. 按优先级从高到低排序剩余和新识别的优化点
-6. 更新 todo-optim.json
+3. 加载 optim_history.json，读取历史优化记录
+4. 加载最新的代码文件
+5. 【代码分析】重新分析代码，识别新的优化机会
+6. 结合历史经验评估每个优化点的潜力
+7. 按优化潜力从大到小排序剩余和新识别的优化点
+8. 更新 todo-optim.json
 ```
+
+## 历史经验分析方法
+
+**读取 optim_history.json 结构**：
+```json
+{
+  "optimization_rounds": [
+    {
+      "round": 1,
+      "optimization_point": "入参静态化",
+      "status": "success",
+      "speedup": 1.15,
+      "improvement_percent": "15%"
+    },
+    {
+      "round": 2,
+      "optimization_point": "Tiling策略",
+      "status": "failed",
+      "error": "内存溢出"
+    }
+  ]
+}
+```
+
+**历史经验评估规则**：
+- 统计每个 dimension（优化维度）的历史平均 speedup
+- speedup ≥ 1.2 → 高潜力优化类型，优先推荐
+- speedup ≥ 1.05 → 中等潜力优化类型
+- speedup < 1.0 或 failed → 低潜力优化类型，延后推荐或跳过
+- 从未尝试过的维度 → 根据维度通用优化潜力评估
 
 ## 分析维度
 
@@ -386,6 +423,7 @@ def kernel(A, C, M, N, BLOCK_SIZE: tl.constexpr):
 - ⚠️ **每个发现的优化点都必须写入 todo-optim.json**
 - ⚠️ **优化建议必须具体、可执行**
 - ⚠️ **只能使用本 skill 规定的优化方式进行识别，不要使用任何超出本 skill 之外的优化方式**
-- ⚠️ **优化点必须按优先级从高到低排序，优先级高的优化点排在前面**
+- ⚠️ **优化点必须按优化潜力从大到小排序，优化潜力高的排在前面**
+- ⚠️ **必须结合历史经验（optim_history.json）评估每个优化点的潜力**
 - ⚠️ **todo-optim.json 只保留未完成的优化点，已完成或失败的优化点必须移除**
 - 如果某个维度没有发现问题，仍需在报告中注明"该维度无明显问题"

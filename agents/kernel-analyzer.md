@@ -22,9 +22,10 @@ skills:
 
 **你的唯一任务：创建和更新 todo-optim.json 文件**
 
-1. **校验输入参数** - 确保 npu, code_file_path, todo_optim_path, arch 字段存在
-2. **调用 kernel-analyzer skill** - 执行性能分析
-3. **确保 todo-optim.json 被正确创建/更新** - 这是你的核心义务
+1. **校验输入参数** - 确保 npu, code_file_path, todo_optim_path, arch, optim_history_path 字段存在
+2. **读取优化历史** - 读取 optim_history.json 了解历史尝试记录
+3. **调用 kernel-analyzer skill** - 执行性能分析，结合历史经验识别优化机会
+4. **确保 todo-optim.json 被正确创建/更新** - 这是你的核心义务
 
 ## 关键约束
 
@@ -40,11 +41,12 @@ skills:
   - status == "success" → 移除该优化点（已完成）
   - status == "failed" → 移除该优化点（不再重试）
   - 重新分析最新代码，识别新的优化机会
-  - 按优先级排序所有优化点
-- **禁止行为**：
-  - 不要承担代码生成、验证、性能优化职责
-  - 不要跳过任何更新步骤
-  - 不要输出长篇分析报告
+  - **按优化潜力从大到小排序所有优化点**
+- **历史经验参考规则**：
+  - 读取 optim_history.json 中的历史记录
+  - 分析相同优化点在不同轮次的表现（speedup 越大说明该类型优化越有效）
+  - 优先推荐历史上加速效果明显的优化类型
+  - 避免重复推荐效果不佳的优化类型
 
 ---
 
@@ -55,6 +57,7 @@ skills:
 - `code_file_path`：待分析的 kernel 代码文件路径
 - `todo_optim_path`：todo-optim.json 输出路径（必须写入此文件）
 - `arch`：硬件架构
+- `optim_history_path`：优化历史文件路径（optim_history.json）
 
 可选字段：
 - `optimization_result`：本轮优化结果，**必须用于更新 todo-optim.json**
@@ -86,24 +89,27 @@ skills:
 ```
 1. 检查必填输入字段是否存在
 2. 设置运行时环境：export ASCEND_RT_VISIBLE_DEVICES=${npu}
-3. 调用 kernel-analyzer skill 分析 code_file_path
-4. 【分析 + 写入 一次性完成】：
-   
+3. 读取 optim_history.json，了解历史优化记录
+4. 调用 kernel-analyzer skill 分析 code_file_path
+5. 【分析 + 写入 一次性完成】：
+
    首次调用（无 optimization_result）：
      → 分析 code_file_path，识别所有优化点
+     → 结合历史经验，对优化点按潜力排序
      → 创建 todo-optim.json，写入所有优化点
-   
+
    后续调用（有 optimization_result）：
      → 读取现有 todo-optim.json
      → 根据 optimization_result.status 移除对应优化点
        - success → 移除（已完成）
        - failed → 移除（不再重试）
      → 重新分析 code_file_path，识别新优化点
-     → 合并剩余优化点和新优化点，按优先级排序
+     → 结合历史经验（参考 optim_history.json），按优化潜力排序
+     → 合并剩余优化点和新优化点，按优化潜力排序
      → 更新 todo-optim.json（覆盖写入）
-   
-5. 验证 todo-optim.json 已正确写入且格式有效
-6. 返回简短结果：
+
+6. 验证 todo-optim.json 已正确写入且格式有效
+7. 返回简短结果：
    - 成功：分析完成，todo-optim.json 已更新
    - 失败：错误原因
 ```

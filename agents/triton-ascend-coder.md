@@ -273,10 +273,11 @@ opt_round = 0
 
 ── 4.0 首次分析（必须执行）────────────────────────────────
 【强制】调用 kernel-analyzer 子 Agent：
-  - 输入：code_file_path, todo_optim_path, npu, arch
+  - 输入：code_file_path, todo_optim_path, optim_history_path, npu, arch
   - kernel-analyzer 单次调用必须完成：
     1. 分析 code_file_path 的代码，识别优化点
-    2. 创建 todo-optim.json 并写入所有优化点
+    2. 结合历史经验排序优化点
+    3. 创建 todo-optim.json 并写入所有优化点
 【验证】确认 todo-optim.json 已创建且格式正确
 如果验证失败 → 重新调用 kernel-analyzer（最多 2 次）
 
@@ -334,13 +335,15 @@ while opt_round < max_opt_rounds:
       - 输入：
         · code_file_path = best_code（最新优化后的代码）
         · todo_optim_path = todo-optim.json 路径
+        · optim_history_path = {工作目录}/output/optim_history.json
         · npu = NPU设备ID
         · arch = 硬件架构
         · optimization_result = 本轮优化结果
     【重要】kernel-analyzer 单次调用必须完成：
       1. 根据 optimization_result 移除已完成/失败的优化点
-      2. 重新分析 best_code，识别新的优化机会
-      3. 将结果写入 todo-optim.json（一次性完成）
+      2. 结合历史经验排序优化点
+      3. 重新分析 best_code，识别新的优化机会
+      4. 将结果写入 todo-optim.json（一次性完成）
     【验证】确认 todo-optim.json 已更新且格式正确
     如果验证失败 → 重新调用 kernel-analyzer（最多 2 次）
 
@@ -391,10 +394,11 @@ while opt_round < max_opt_rounds:
   - npu: NPU设备ID
   - code_file_path: Phase 3 的 generated_code.py
   - todo_optim_path: todo-optim.json输出路径
+  - optim_history_path: {工作目录}/output/optim_history.json
   - arch: 硬件架构
 
 输出：
-  - todo-optim.json文件（创建，包含识别出的所有可优化点）
+  - todo-optim.json文件（创建，包含识别出的所有可优化点，按优化潜力排序）
 ```
 
 #### 4.2 检查优化点（对应 4.1）
@@ -448,6 +452,7 @@ mkdir -p {round_dir}/verify
   - optimization_point: 本轮目标优化点（从todo-optim.json解析）
   - output_code_path: round_dir/optimized_code.py
   - verify_dir: round_dir/verify
+  - output_dir: {工作目录}/output
   - arch: 硬件架构
 
 kernel-optimizer 返回：
@@ -493,6 +498,7 @@ if kernel-optimizer 返回 success == true:
   - npu: NPU设备ID
   - code_file_path: 最新优化后的代码
   - todo_optim_path: todo-optim.json路径
+  - optim_history_path: {工作目录}/output/optim_history.json
   - arch: 硬件架构
   - optimization_result: 本轮优化结果
     {
@@ -504,11 +510,12 @@ if kernel-optimizer 返回 success == true:
 
 kernel-analyzer 必须完成以下操作：
   1. 根据 optimization_result 移除已完成或失败的优化点
-  2. 重新分析代码，识别新的优化机会
-  3. 将更新后的 optimization_points 写入 todo-optim.json
+  2. 结合历史经验排序优化点
+  3. 重新分析代码，识别新的优化机会
+  4. 将更新后的 optimization_points 写入 todo-optim.json
 
 输出：
-  - todo-optim.json文件（更新，移除已处理优化点，添加新识别的优化点）
+  - todo-optim.json文件（更新，移除已处理优化点，添加新识别的优化点，按优化潜力排序）
 ```
 
 #### 4.8 退出优化阶段（对应 4.9）

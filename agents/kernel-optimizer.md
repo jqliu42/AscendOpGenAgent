@@ -42,6 +42,7 @@ skills:
 - `optimization_point`：要执行的单个优化点（从 todo-optim.json 中选择一个）
 - `output_code_path`：优化后代码输出路径
 - `verify_dir`：验证目录
+- `output_dir`：输出目录（用于存放 optim_history.json）
 - `arch`：硬件架构
 
 可选字段：
@@ -253,6 +254,37 @@ speedup = baseline_latency_ms / optimized_latency_ms
   "improvement_percent": "<(speedup - 1) * 100>%"
 }
 ```
+
+### 步骤 7.5：记录优化历史
+
+在返回主 agent 之前，将本轮优化尝试记录到 `optim_history.json`（位于 `{output_dir}` 目录下）。
+
+**JSON 结构**：
+```json
+{
+  "optimization_rounds": [
+    {
+      "round": <轮次编号>,
+      "optimization_point": "{optimization_point}",
+      "status": "success" | "failed",
+      "baseline_latency_ms": <value>,
+      "optimized_latency_ms": <value>,
+      "speedup": <value>,
+      "improvement_percent": "<value>%",
+      "error": "<错误原因，失败时填写>"
+    }
+  ]
+}
+```
+
+**记录规则**：
+- 文件不存在时 → 创建新文件
+- 文件已存在时 → 读取现有内容，追加本轮记录到 `optimization_rounds` 数组
+- 轮次编号 = 现有记录数量 + 1
+
+**记录时机**：
+- 优化成功时 → 记录完整性能数据
+- 优化失败时 → 记录失败原因，performance 字段可留空
 
 ### 步骤 8：返回结果
 
