@@ -319,6 +319,9 @@ while opt_round < max_opt_rounds:
       → optimization_history.append({轮次, 优化点, 性能})
       → 记录相比优化前的加速比
       → optimization_result = {status: "success", speedup: xxx}
+      【关键】比较本轮优化结果与 output/ 中现有最优结果：
+        - 如果 output/perf_result.json 不存在 → 直接将本轮结果晋升到 output/
+        - 如果本轮 optimized_latency_ms < output/perf_result.json 中的最优 latency → 将本轮代码和性能结果覆盖更新到 output/
 
     if 验证失败或性能劣化:
       → 记录错误
@@ -477,6 +480,9 @@ if kernel-optimizer 返回 success == true:
       "performance": <performance数据>,
       "code_path": round_dir/optimized_code.py
     })
+  【关键】比较本轮优化结果与 output/ 中现有最优结果：
+    - 如果 output/perf_result.json 不存在 → 直接将本轮结果晋升到 output/
+    - 如果本轮 optimized_latency_ms < output/perf_result.json 中的最优 latency → 将本轮代码和性能结果覆盖更新到 output/
 ```
 
 #### 4.7 更新 todo-optim.json（对应 4.6）

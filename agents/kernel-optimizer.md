@@ -132,6 +132,15 @@ export ASCEND_RT_VISIBLE_DEVICES=${npu}
 
 优化完成后，将优化后代码同时写入 `output_code_path`。
 
+**优化失败自修复机制**：
+
+`kernel-optimizer` skill 仅在开始阶段加载一次。精度验证失败后，根据报错信息反思问题原因，自行修改代码进行修复：
+- 首次失败 → 根据报错信息反思，自行修改代码
+- 第二次失败 → 再次根据报错反思，修改代码
+- 第三次失败 → 终止本轮优化，返回失败结果给主 agent
+
+最多尝试 **3 次修改**（包括首次），若仍无法通过精度验证，则退出本轮优化，返回失败结果。
+
 ### 步骤 5：精度验证（两次验证）
 
 ⚠️ **必须执行两次精度验证**，确保优化前后代码都与 PyTorch 参考实现一致。
@@ -174,7 +183,7 @@ python3 <kernel-verifier scripts路径>/verify.py \
 
 **结果判断**：
 - 通过 → 两次精度验证均通过，精度无问题，继续步骤 6
-- 失败 → 返回错误：`"优化后代码精度验证失败"`
+- 失败 → 若仍有重试次数（< 3 次），回到步骤 4 重新优化；若已达到 3 次修改上限，则终止优化，返回失败结果给主 agent
 
 ### 步骤 6：性能验证（两次测试）
 
@@ -279,7 +288,8 @@ speedup = baseline_latency_ms / optimized_latency_ms
   "error": "<error description>",
   "optimization_point": "<attempted optimization point>",
   "verification_passed": false,
-  "failed_step": "<step name>"
+  "failed_step": "<step name>",
+  "retry_count": <已尝试的修改次数>
 }
 ```
 
@@ -291,7 +301,8 @@ speedup = baseline_latency_ms / optimized_latency_ms
 |------|------|------|
 | 两次精度验证均通过 | 成功 | 继续性能测试 |
 | 第一次精度验证失败 | 失败 | 返回错误：优化前代码无法作为基线 |
-| 第二次精度验证失败 | 失败 | 返回错误：优化后代码精度不达标 |
+| 第二次精度验证失败（< 3 次） | 可重试 | 回到步骤 4 重新优化 |
+| 第二次精度验证失败（≥ 3 次） | 失败 | 终止优化，返回失败结果给主 agent |
 | speedup ≥ 1.0 | 优化有效 | 返回成功结果 |
 | speedup < 1.0 | 性能劣化 | 返回失败，说明性能劣化 |
 
