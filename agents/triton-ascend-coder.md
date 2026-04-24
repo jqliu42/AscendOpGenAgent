@@ -355,7 +355,11 @@ while opt_round < max_opt_rounds:
     返回 4.1 继续下一轮
 
     ── 4.9 退出优化阶段 ─────────────────────────────────────
-    从 optimization_history 中选择最优结果作为最终结果
+    【性能达标退出条件】如果当前 speedup_vs_torch >= 1.0（即 Triton 性能已达到或超过 PyTorch 基线）：
+      → 记录性能达标
+      → 进入 Phase 5
+
+    否则从 optimization_history 中选择最优结果作为最终结果
     进入 Phase 5
 ```
 
@@ -525,11 +529,17 @@ kernel-analyzer 必须完成以下操作：
 
 #### 4.8 退出优化阶段（对应 4.9）
 
+【性能达标退出条件】如果当前 speedup_vs_torch >= 1.0（即 Triton 性能已达到或超过 PyTorch 基线）：
+  → 记录性能达标
+  → 进入 Phase 5
+
 满足以下任一条件即退出优化阶段：
-1. `todo-optim.json` 为空（无更多优化点）
-2. 达到 max_opt_rounds（默认 10 轮）
-3. 连续失败达到 3 次
-  → 记录加速比：speedup = best_perf.speedup
+1. `speedup_vs_torch >= 1.0`（Triton 性能达到 PyTorch 基线）
+2. `todo-optim.json` 为空（无更多优化点）
+3. 达到 max_opt_rounds（默认 5 轮）
+4. 连续失败达到 3 次
+
+→ 记录加速比：speedup = best_perf.speedup
   → 准备 optimization_result 传递给 kernel-analyzer：
     {
       "optimization_point": <优化点序号和名称>,
@@ -633,9 +643,10 @@ else:
 ### Phase 4 完成条件
 
 满足以下任一条件即退出优化阶段：
-1. `todo-optim.json` 为空（无更多优化点）
-2. 达到 `max_opt_rounds`（默认 5 轮）
-3. 优化点执行失败连续 3 次
+1. `speedup_vs_torch >= 1.0`（Triton 性能达到 PyTorch 基线）
+2. `todo-optim.json` 为空（无更多优化点）
+3. 达到 `max_opt_rounds`（默认 5 轮）
+4. 优化点执行失败连续 3 次
 
 ### Phase 4 失败处理
 
