@@ -323,6 +323,11 @@ while opt_round < max_opt_rounds:
       【关键】比较本轮优化结果与 output/ 中现有最优结果：
         - 如果 output/perf_result.json 不存在 → 直接将本轮结果晋升到 output/
         - 如果本轮 optimized_latency_ms < output/perf_result.json 中的最优 latency → 将本轮代码和性能结果覆盖更新到 output/
+      【⚠️ 晋升时必须同时更新两个文件，缺一不可】：
+        1. cp {round_dir}/optimized_code.py → {工作目录}/output/generated_code.py
+        2. 根据 kernel-optimizer 返回的 performance 数据，构造并写入 {工作目录}/output/perf_result.json
+           （注意：kernel-optimizer 不直接产出 perf_result.json，需主 Agent 从返回值中提取构造）
+        两个文件必须同步更新，禁止只更新其中一个。
 
     if 验证失败或性能劣化:
       → 记录错误
