@@ -131,6 +131,19 @@ export ASCEND_RT_VISIBLE_DEVICES=${npu}
 2. 执行 checklist 检查
 3. 返回优化后代码
 
+**记录 executed_action**：
+skill 返回优化后代码后，主 Agent 需要自行分析优化前后的代码差异，记录本轮执行的详细动作：
+- 读取了哪个参考文档
+- 对代码做了哪些具体修改（如：参数声明变更、循环重排、BLOCK_SIZE 修改等）
+- 修改涉及哪些函数或代码行
+
+格式示例：
+```
+加载 references/constexpr_parameters.md 参考文档
+将 stride_am, stride_an, stride_bn 参数从函数参数移动到 tl.constexpr 声明
+将 BLOCK_M, BLOCK_N 从 64 改为 128
+```
+
 优化完成后，将优化后代码同时写入 `output_code_path`。
 
 **优化失败自修复机制**：
@@ -265,16 +278,61 @@ speedup = baseline_latency_ms / optimized_latency_ms
   "optimization_rounds": [
     {
       "round": <轮次编号>,
-      "optimization_point": "{optimization_point}",
+      "optimization_point": {
+        "id": <优化点序号>,
+        "dimension": "<优化方向，如：入参静态化、Tiling策略、BLOCK_SIZE调优等>",
+        "description": "<优化点详细描述，描述当前代码存在的问题>",
+        "suggestion": "<优化建议，描述应该如何修改>",
+        "executed_action": "<本轮实际执行的优化动作，详细描述做了哪些具体修改>"
+      },
       "status": "success" | "failed",
       "baseline_latency_ms": <value>,
       "optimized_latency_ms": <value>,
       "speedup": <value>,
       "improvement_percent": "<value>%",
-      "error": "<错误原因，失败时填写>"
+      "failure_reason": "<失败原因，失败时填写，包含错误类型、错误位置、错误详情>"
     }
   ]
 }
+```
+
+**字段说明**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `round` | int | 轮次编号 |
+| `optimization_point` | object | 优化点完整信息 |
+| `optimization_point.id` | int | 优化点序号 |
+| `optimization_point.dimension` | string | 优化方向/维度 |
+| `optimization_point.description` | string | 优化点详细描述 |
+| `optimization_point.suggestion` | string | 优化建议 |
+| `optimization_point.executed_action` | string | 本轮实际执行的优化动作 |
+| `status` | string | 优化状态：success 或 failed |
+| `baseline_latency_ms` | float | 优化前延迟（毫秒） |
+| `optimized_latency_ms` | float | 优化后延迟（毫秒） |
+| `speedup` | float | 加速比 |
+| `improvement_percent` | string | 提升百分比 |
+| `failure_reason` | string | 失败原因（失败时填写） |
+
+**解析 optimization_point 字符串**：
+
+kernel-analyzer 传入的 `optimization_point` 格式为 `"{id}: {dimension}"`，例如 `"1: 入参静态化"`。
+
+`description` 和 `suggestion` 需从 todo-optim.json 中查找对应的完整信息：
+- 读取 `{output_dir}/todo-optim.json`
+- 在 `optimization_points` 数组中查找 `id` 对应的对象
+- 提取其 `description` 和 `suggestion` 字段
+
+**executed_action 记录规则**：
+
+记录本轮优化过程中实际执行的具体动作，包括：
+- 对代码做了哪些具体修改
+- 修改涉及哪些函数或代码
+
+格式示例：
+```
+将 stride_am, stride_an, stride_bn 参数从函数参数移动到 tl.constexpr 声明
+将 BLOCK_M, BLOCK_N 从 64 改为 128
 ```
 
 **记录规则**：
@@ -283,8 +341,8 @@ speedup = baseline_latency_ms / optimized_latency_ms
 - 轮次编号 = 现有记录数量 + 1
 
 **记录时机**：
-- 优化成功时 → 记录完整性能数据
-- 优化失败时 → 记录失败原因，performance 字段可留空
+- 优化成功时 → 记录完整性能数据和执行动作
+- 优化失败时 → 记录失败原因和验证详情，performance 字段可留空或填写 -1
 
 ### 步骤 8：返回结果
 

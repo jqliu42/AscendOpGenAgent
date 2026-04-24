@@ -255,7 +255,7 @@ Phase 3 的 verify 和 benchmark 都通过 → 进入 Phase 4
 
 ```
 opt_round = 0
-max_opt_rounds = 10
+max_opt_rounds = 5
 best_code = Phase 3 产出的 generated_code.py
 best_perf = Phase 3 产出的 perf_result.json
 baseline_code = Phase 3 产出的 generated_code.py
@@ -634,7 +634,7 @@ else:
 
 满足以下任一条件即退出优化阶段：
 1. `todo-optim.json` 为空（无更多优化点）
-2. 达到 `max_opt_rounds`（默认 10 轮）
+2. 达到 `max_opt_rounds`（默认 5 轮）
 3. 优化点执行失败连续 3 次
 
 ### Phase 4 失败处理
@@ -774,7 +774,7 @@ ${pwd}/triton_ascend_output/op_{op_name}_{timestamp}_{rid}/
 | ⚠️ **禁止自行执行核心任务** | **代码生成、性能优化、精度验证、性能测试必须通过子 Agent 完成，禁止主 Agent 自行执行。违反此约束将导致任务失败。** |
 | ⚠️ **禁止修改 todo-optim.json** | **主 Agent 禁止直接修改 todo-optim.json，只有 kernel-analyzer 子 Agent 有权创建和更新该文件。主 Agent 只能将优化结果传递给 kernel-analyzer。** |
 | Phase 3 最大迭代 | 5 次，禁止超出 |
-| Phase 4 最大轮次 | 10 轮（多轮迭代），禁止超出 |
+| Phase 4 最大轮次 | 5 轮（多轮迭代），禁止超出 |
 | Phase 4 连续失败上限 | 3 次，连续失败达此数则终止优化 |
 | Phase 4 优化点选择 | 每轮只选择一个优化点执行 |
 | Phase 4 优化结果 | 选择全流程中性能最优的那次 |

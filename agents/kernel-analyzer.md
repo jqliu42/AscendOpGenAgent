@@ -44,7 +44,10 @@ skills:
   - **按优化潜力从大到小排序所有优化点**
 - **历史经验参考规则**：
   - 读取 optim_history.json 中的历史记录
+  - **optimization_point 字段是对象**，包含 id、dimension、description、suggestion、executed_action
   - 分析相同优化点在不同轮次的表现（speedup 越大说明该类型优化越有效）
+  - **重点分析 failure_reason**：了解之前失败的具体原因，避免重复失败的尝试
+  - **参考 executed_action**：了解之前成功优化的具体做法，作为后续优化的参考
   - 优先推荐历史上加速效果明显的优化类型
   - 避免重复推荐效果不佳的优化类型
 
@@ -66,7 +69,7 @@ skills:
     "optimization_point": "<id>: <dimension>",
     "status": "success" | "failed",
     "speedup": 1.25,
-    "reason": "失败原因（仅 failed 时）"
+    "reason": "失败原因（仅 failed 时需要，包含错误类型、错误位置、错误详情）"
   }
   ```
 

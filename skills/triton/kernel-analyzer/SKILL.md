@@ -33,7 +33,7 @@ argument-hint: >
   "optimization_point": "序号: 维度名称",
   "status": "success" | "failed",
   "speedup": 1.25,
-  "reason": "失败原因（仅 status 为 failed 时需要）"
+  "reason": "失败原因（仅 status 为 failed 时需要，包含错误类型、错误位置、错误详情）"
 }
 ```
 
@@ -44,7 +44,7 @@ argument-hint: >
 | optimization_point | 是 | 优化点标识，格式为"序号: 维度名称" |
 | status | 是 | 优化结果状态，"success" 或 "failed" |
 | speedup | 否 | 加速比（仅 status 为 success 时），如 1.25 表示性能提升 25% |
-| reason | 否 | 失败原因（仅 status 为 failed 时需要） |
+| reason | 否 | 失败原因（仅 status 为 failed 时需要），应包含错误类型、错误位置、错误详情 |
 
 ## 分析流程
 
@@ -84,16 +84,31 @@ argument-hint: >
   "optimization_rounds": [
     {
       "round": 1,
-      "optimization_point": "入参静态化",
+      "optimization_point": {
+        "id": 1,
+        "dimension": "入参静态化",
+        "description": "stride_am 等参数未声明为 tl.constexpr",
+        "suggestion": "将 stride_am, stride_an 等固定参数声明为 tl.constexpr",
+        "executed_action": "将 stride_am, stride_an 从函数参数移动到 tl.constexpr 声明"
+      },
       "status": "success",
       "speedup": 1.15,
-      "improvement_percent": "15%"
+      "improvement_percent": "15%",
+      "failure_reason": null
     },
     {
       "round": 2,
-      "optimization_point": "Tiling策略",
+      "optimization_point": {
+        "id": 2,
+        "dimension": "Tiling策略",
+        "description": "tl.arange 作用于非连续轴",
+        "suggestion": "调整 tiling 策略，使向量化访存作用于连续轴",
+        "executed_action": "交换循环顺序，将 W 维度作为内层"
+      },
       "status": "failed",
-      "error": "内存溢出"
+      "speedup": -1,
+      "improvement_percent": "-10%",
+      "failure_reason": "内存溢出：调整后的 tiling 策略导致 BLOCK_SIZE 过大，NPU 内存不足"
     }
   ]
 }
@@ -105,6 +120,8 @@ argument-hint: >
 - speedup ≥ 1.05 → 中等潜力优化类型
 - speedup < 1.0 或 failed → 低潜力优化类型，延后推荐或跳过
 - 从未尝试过的维度 → 根据维度通用优化潜力评估
+- **分析 failure_reason**：了解之前失败的具体原因，避免重复失败的尝试
+- **参考 executed_action**：了解之前成功优化的具体做法，作为后续优化的参考
 
 ## 分析维度
 
