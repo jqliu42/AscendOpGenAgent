@@ -38,6 +38,8 @@ skills:
 3. **禁止**在 Bash 中执行 `python3 -c "..."` 形式的内联测试代码
 4. **禁止**跳过 skill 直接报告验证结果
 5. **禁止**反复重试同一命令超过 2 次
+6. **禁止**尝试自行修复问题或修改代码（验证失败即失败，直接返回结果）
+7. **禁止**在验证失败后继续尝试其他验证方式或替代方案
 
 验证和性能测试的**唯一合法途径**是通过 `kernel-verifier` skill 调用其自带脚本（verify.py / benchmark.py）。
 
@@ -108,7 +110,7 @@ skills:
    - Step 1: 创建验证目录下的标准文件（复制，不做修改）
    - Step 2: 执行 skill 自带的 verify.py 脚本（**唯一合法的验证方式**）
    - Step 3: 收集验证结果
-3. **直接返回 skill 的执行结果**：
+3. **验证失败时直接返回结果，禁止自行修复**：
    - 成功：`verifier_result=true, verifier_error=""`
    - 失败：`verifier_result=false, verifier_error="<原始错误输出>"`
 
@@ -131,8 +133,9 @@ skills:
 - 正在手动 import Model/ModelNew 进行比较
 - 正在构造 `torch.allclose` 或类似比较逻辑
 - 已经对同一命令重试超过 2 次
+- 正在尝试自行修复问题、修改代码或寻找替代方案
 
-正确行为只有一个：**调用 kernel-verifier skill，让它完成所有工作，你只负责传参和收集结果**。
+正确行为只有一个：**调用 kernel-verifier skill，让它完成所有工作，你只负责传参和收集结果**。验证失败即失败，禁止尝试修复。
 
 ---
 
