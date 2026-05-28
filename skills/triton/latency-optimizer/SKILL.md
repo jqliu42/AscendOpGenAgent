@@ -492,9 +492,42 @@ else:
 
 ---
 
+### 优化点 15：Kernel Fusion 优化
+
+**适用条件**：Agent 为一个算子生成了多阶段实现（多个 Triton kernel 串行执行），且合并不会引入核间规约
+
+**典型代码特征**：
+```python
+# 阶段 1: 先进行某种变换
+kernel_stage1[grid1](input_ptr, temp_buffer, ...)
+
+# 阶段 2: 再进行另一种变换
+kernel_stage2[grid2](temp_buffer, output_ptr, ...)
+
+# 或者通过中间 buffer 传递数据
+intermediate = tl.load(temp_buffer + offset)
+# 多个 kernel 共享中间数据
+```
+
+**判断逻辑**：
+1. 检查是否存在多个串行执行的 Triton kernel 调用
+2. 检查这些 kernel 之间是否存在中间 buffer 数据传递
+3. 检查是否可以通过将多个 kernel 的计算逻辑合并到一个 kernel 中来减少中间数据读写
+4. **关键判断**：如果合并后的 kernel 需要引入核间规约（cross-core reduction），则不应合并
+   - 核间规约特征：`tl.sum`、`tl.max` 等规约操作，且规约维度跨越多个 program
+   - 在 Triton Ascend 上，核间规约效率极低，应避免
+5. 如果存在多阶段实现且合并不会引入核间规约 → 涉及
+6. 如果只有单一 kernel，或合并会引入核间规约 → 不涉及，跳过
+
+**命中条件**：存在多阶段 Triton kernel 实现，且合并不会引入核间规约
+
+**参考文档**：`references/kernel-fusion.md`
+
+---
+
 ## 优化流程
 ```
-1. 按顺序检查优化点 1 → 2 → 3 → ... → 13
+1. 按顺序检查优化点 1 → 2 → 3 → ... → 15
 2. 对于当前优化点，先判断是否命中（代码特征满足 + 适用条件成立）：
    - 未命中 → 跳过，检查下一优化点
    - 命中 → 参考对应文档，应用优化策略
@@ -545,4 +578,5 @@ else:
 | Grid 形状与多路径特化 | `references/grid-dispatch-specialization.md` |
 | Autotune 自动调优 | `references/autotune.md` |
 | 混合策略自动选择 | `references/mixed_strategy.md` |
+| Kernel Fusion 优化 | `references/kernel-fusion.md` |
 | 代码规范检查 | `references/checklist.md` |
